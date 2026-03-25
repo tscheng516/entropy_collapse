@@ -109,6 +109,18 @@ ctx = (
 
 os.makedirs(cfg.out_dir, exist_ok=True)
 
+# Create a per-run timestamped subdirectory to avoid overwriting previous
+# runs. Keep the original `cfg.out_dir` path when resuming so callers can
+# continue an existing run.
+if cfg.init_from == "resume":
+    run_out_dir = cfg.out_dir
+else:
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    run_out_dir = os.path.join(cfg.out_dir, run_id)
+    os.makedirs(run_out_dir, exist_ok=True)
+
+print(f"[io] outputs → {run_out_dir}")
+
 # ---------------------------------------------------------------------------
 # 3.  Data
 # ---------------------------------------------------------------------------
@@ -299,7 +311,7 @@ def _save_checkpoint(suffix: str = "ckpt") -> None:
         },
         "config": vars(cfg),
     }
-    path = os.path.join(cfg.out_dir, f"{suffix}.pt")
+    path = os.path.join(run_out_dir, f"{suffix}.pt")
     torch.save(checkpoint, path)
     print(f"[ckpt] saved → {path}")
 
@@ -388,19 +400,26 @@ for iter_num in range(iter_num, cfg.max_iters):
         history[k].append(curvature[k])
 
     # ---- Attention entropy ----
+    # Capture attention entropy from the most recent forward pass.  We
+    # compute it immediately after the model forward inside the normal
+    # training context so the patched attention forward has executed
+    # and populated `block.attn.last_att` reliably for both optimisers
+    # (avoids subtle differences between eval/train contexts and
+    # compiled vs. eager execution).
     layer_entropies: list[float] = [0.0] * cfg.n_layer
-    if iter_num % cfg.entropy_freq == 0:
-        model.eval()
-        with torch.no_grad():
-            _ = model(X, Y)
-        layer_entropies = get_attention_entropy(model)
-        model.train()
-    history["entropy"].append(layer_entropies)
 
     # ---- Standard training step ----
     optimizer.zero_grad(set_to_none=True)
     with ctx:
         _, loss = model(X, Y)
+
+        # Record attention entropy immediately after the forward so the
+        # patched attention modules have populated their cached
+        # `last_att` tensors.  Wrap in `no_grad` to avoid touching the
+        # autograd graph.
+        if iter_num % cfg.entropy_freq == 0:
+            with torch.no_grad():
+                layer_entropies = get_attention_entropy(model)
 
     loss.backward()
     if cfg.grad_clip > 0.0:
@@ -410,6 +429,9 @@ for iter_num in range(iter_num, cfg.max_iters):
     loss_val = loss.item()
     history["loss"].append(loss_val)
     history["lr"].append(lr)
+
+    # Record entropy history (may be the zero-default when not sampled)
+    history["entropy"].append(layer_entropies)
 
     # pre-fetch next batch
     X, Y = _get_train_batch()
@@ -450,7 +472,7 @@ for iter_num in range(iter_num, cfg.max_iters):
 # ---------------------------------------------------------------------------
 _save_checkpoint("final_ckpt")
 
-history_path = os.path.join(cfg.out_dir, "history.pkl")
+history_path = os.path.join(run_out_dir, "history.pkl")
 with open(history_path, "wb") as f:
     pickle.dump(history, f)
 print(f"[done] history saved → {history_path}")
@@ -466,9 +488,9 @@ from src.plotting import plot_training_dynamics, plot_spike_cooccurrence  # noqa
 fig = plot_training_dynamics(
     histories={"Run": history},
     lrs={"Run": cfg.learning_rate},
-    save_path=os.path.join(cfg.out_dir, "training_dynamics.png"),
+    save_path=os.path.join(run_out_dir, "training_dynamics.png"),
 )
-print(f"[plot] training dynamics → {os.path.join(cfg.out_dir, 'training_dynamics.png')}")
+print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
 
 fig2, res = plot_spike_cooccurrence(
     history["hessian"],
@@ -476,7 +498,7 @@ fig2, res = plot_spike_cooccurrence(
     x_name="Exact H",
     y_name="H_VV",
     window=15,
-    z_score=3.0,
-    save_path=os.path.join(cfg.out_dir, "spike_cooccurrence_H_vs_HVV.png"),
+    z_score=10.0,
+    save_path=os.path.join(run_out_dir, "spike_cooccurrence_H_vs_HVV.png"),
 )
 print(f"[plot] spike co-occurrence: P(H_VV spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}")
