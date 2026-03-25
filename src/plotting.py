@@ -73,8 +73,18 @@ def plot_training_dynamics(
         lr = lrs.get(name, 1e-3)
         color = "blue" if "adam" in name.lower() else "orange"
 
+        # Normalize supported key names and ensure numpy arrays for plotting
+        def _as1d(key, alt=None):
+            val = h.get(key, h.get(alt) if alt is not None else None)
+            if val is None:
+                return np.asarray([])
+            arr = np.asarray(val)
+            if arr.ndim == 0:
+                return arr.reshape(-1)
+            return arr.ravel()
+
         # --- Col 0: loss ---
-        axs[row, 0].plot(h["loss"], color=color, label=f"{name} Loss")
+        axs[row, 0].plot(_as1d("loss"), color=color, label=f"{name} Loss")
         axs[row, 0].set_title(f"{name} Training Loss")
         axs[row, 0].set_xlabel("Iteration")
         axs[row, 0].set_ylabel("Cross-entropy loss")
@@ -82,15 +92,17 @@ def plot_training_dynamics(
 
         # --- Col 1: Hessian proxies ---
         ax = axs[row, 1]
-        ax.plot(h["hessian"], color="red", linewidth=2, label="Exact Hessian (H)")
+        ax.plot(_as1d("hessian"), color="red", linewidth=2, label="Exact Hessian (H)")
         if "adam" in name.lower():
-            ax.plot(
-                h["prec_h"],
-                color="purple",
-                linestyle="--",
-                linewidth=2,
-                label=r"Precond. Hessian ($\tilde{H}$)",
-            )
+            prec_arr = _as1d("prec_h")
+            if prec_arr.size:
+                ax.plot(
+                    prec_arr,
+                    color="purple",
+                    linestyle="--",
+                    linewidth=2,
+                    label=r"Precond. Hessian ($\tilde{H}$)",
+                )
             ceiling = 38.0 / lr
             ax.axhline(
                 y=ceiling,
@@ -106,20 +118,25 @@ def plot_training_dynamics(
                 linestyle=":",
                 label=f"EoS ceiling (2/η = {ceiling:.1f})",
             )
-        ax.plot(
-            h["gn"],
-            color="brown",
-            linestyle="--",
-            linewidth=2,
-            label=r"Gauss-Newton ($H^{GN}$)",
-        )
-        ax.plot(
-            h["hessian_vv"],
-            color="magenta",
-            linestyle=":",
-            linewidth=2,
-            label=r"Value Subspace ($H_{VV}$)",
-        )
+        gn_arr = _as1d("gn")
+        if gn_arr.size:
+            ax.plot(
+                gn_arr,
+                color="brown",
+                linestyle="--",
+                linewidth=2,
+                label=r"Gauss-Newton ($H^{GN}$)",
+            )
+
+        vv_arr = _as1d("hessian_vv", alt="vv")
+        if vv_arr.size:
+            ax.plot(
+                vv_arr,
+                color="magenta",
+                linestyle=":",
+                linewidth=2,
+                label=r"Value Subspace ($H_{VV}$)",
+            )
         ax.set_yscale("log")
         ax.set_title(f"{name} Hessian Proxies")
         ax.set_xlabel("Iteration")
@@ -127,7 +144,7 @@ def plot_training_dynamics(
         ax.legend(fontsize="small")
 
         # --- Col 2: per-layer attention entropy ---
-        entropies = np.array(h["entropy"])  # (T, n_layer)
+        entropies = np.array(h.get("entropy", []))  # (T, n_layer)
         if entropies.ndim == 2:
             n_layers = entropies.shape[1]
             colors_entropy = plt.cm.viridis(np.linspace(0, 1, n_layers))
@@ -316,10 +333,16 @@ def print_correlations(history: dict, name: str, sample_every: int = 1) -> None:
     """
     from scipy import stats as sp_stats
 
-    h = np.array(history["hessian"][::sample_every])
-    prec_h = np.array(history["prec_h"][::sample_every])
-    gn = np.array(history["gn"][::sample_every])
-    vv = np.array(history["hessian_vv"][::sample_every])
+    def _gk(d, *keys):
+        for k in keys:
+            if k in d:
+                return np.array(d[k][::sample_every])
+        return np.asarray([])
+
+    h = _gk(history, "hessian")
+    prec_h = _gk(history, "prec_h")
+    gn = _gk(history, "gn")
+    vv = _gk(history, "hessian_vv", "vv")
 
     def _corr(a, b, label):
         mask = np.isfinite(a) & np.isfinite(b)
