@@ -28,6 +28,7 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import median_filter
+from scipy import stats as sp_stats
 
 # Consistency factor to convert MAD into an equivalent standard deviation
 # for a normally-distributed variable: sigma ≈ 1.4826 × MAD.
@@ -64,7 +65,8 @@ def plot_training_dynamics(
     """
     opt_names = list(histories.keys())
     n_rows = len(opt_names)
-    fig, axs = plt.subplots(n_rows, 3, figsize=(24, 5 * n_rows))
+    # Expand layout to include three comparison scatter panels
+    fig, axs = plt.subplots(n_rows, 6, figsize=(36, 5 * n_rows))
     if n_rows == 1:
         axs = axs[np.newaxis, :]  # ensure 2-D indexing works
 
@@ -82,6 +84,32 @@ def plot_training_dynamics(
             if arr.ndim == 0:
                 return arr.reshape(-1)
             return arr.ravel()
+
+        # Small helper to draw log-log scatter comparisons and show correlations
+        def _comp_plot(ax_cmp, x_arr, y_arr, x_label, y_label):
+            x = np.asarray(x_arr, dtype=float)
+            y = np.asarray(y_arr, dtype=float)
+            valid = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
+            if valid.sum() == 0:
+                ax_cmp.text(0.5, 0.5, "no data", ha="center", va="center")
+                return
+            x_c = x[valid]
+            y_c = y[valid]
+            ax_cmp.scatter(x_c, y_c, s=8, alpha=0.6)
+            mn = min(x_c.min(), y_c.min())
+            mx = max(x_c.max(), y_c.max())
+            ax_cmp.plot([mn, mx], [mn, mx], color="gray", linestyle="--", linewidth=1)
+            ax_cmp.set_xscale("log")
+            ax_cmp.set_yscale("log")
+            try:
+                sp, _ = sp_stats.spearmanr(x_c, y_c)
+                pe, _ = sp_stats.pearsonr(x_c, y_c)
+                stats_txt = f"Spearman {sp:.2f} | Pearson {pe:.2f}"
+            except Exception:
+                stats_txt = "corr: n/a"
+            ax_cmp.set_title(f"{y_label} vs {x_label}\n{stats_txt}")
+            ax_cmp.set_xlabel(x_label)
+            ax_cmp.set_ylabel(y_label)
 
         # --- Col 0: loss ---
         axs[row, 0].plot(_as1d("loss"), color=color, label=f"{name} Loss")
@@ -158,6 +186,16 @@ def plot_training_dynamics(
         axs[row, 2].set_xlabel("Iteration")
         axs[row, 2].set_ylabel("Entropy (nats)")
         axs[row, 2].legend(fontsize="small", ncol=2)
+
+        # --- Col 3..5: three comparisons vs exact Hessian ---
+        h_arr = _as1d("hessian")
+        prec_arr = _as1d("prec_h")
+        gn_arr = _as1d("gn")
+        vv_arr = _as1d("hessian_vv", alt="vv")
+
+        _comp_plot(axs[row, 3], h_arr, prec_arr, "H (exact)", "Precond H")
+        _comp_plot(axs[row, 4], h_arr, gn_arr, "H (exact)", "Gauss-Newton")
+        _comp_plot(axs[row, 5], h_arr, vv_arr, "H (exact)", "Value Subspace H")
 
     plt.tight_layout()
     if save_path:
