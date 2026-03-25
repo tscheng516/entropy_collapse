@@ -1,9 +1,9 @@
-# Entropy Collapse — NanoGPT Experiment Code Space
+# Entropy Collapse — Loss Landscape Sharpness Validation
 
-This repository is a structured reimplementation of the analysis carried
-out in `Tin_Sum.ipynb`.  It provides a clean, reproducible training
-pipeline for studying **Hessian sharpness proxies** and **attention
-entropy collapse** in small-scale NanoGPT models.
+This repository validates loss landscape sharpness (via the spectral norm
+of the Hessian and its proxies) and confirms that the proxies track each
+other closely.  Experiments are organised by model family so that shared
+analysis code can be reused cleanly.
 
 ---
 
@@ -11,28 +11,44 @@ entropy collapse** in small-scale NanoGPT models.
 
 ```
 entropy_collapse/
-├── base_train.py            # Main training + checkpointing entry-point
-├── configs/
-│   └── train_config.py      # All experiment flags (LR, init, wandb, …)
-├── src/
-│   ├── helpers.py           # Curvature helpers & attention entropy
-│   ├── model.py             # HookedGPT — NanoGPT with attention caching
-│   ├── data_utils.py        # Data loading & batch sampling
-│   └── plotting.py          # Training-dynamics & spike co-occurrence plots
-├── Tin_Sum.ipynb            # Original exploratory notebook
-├── requirements.txt         # Python dependencies
-└── README.md                # This file
+├── common/                       # Shared analysis utilities (model-agnostic)
+│   ├── power_iteration.py        # λ_max estimation via Hessian-vector products
+│   └── spike_analysis.py         # MAD spike detection, co-occurrence plot,
+│                                 #   Pearson / Spearman correlation helpers
+├── LLM/                          # NanoGPT entropy-collapse experiments
+│   ├── base_train.py             # Main training + checkpointing entry-point
+│   ├── configs/
+│   │   └── train_config.py       # All experiment flags (LR, init, wandb, …)
+│   ├── src/
+│   │   ├── helpers.py            # Curvature helpers & attention entropy
+│   │   ├── model.py              # HookedGPT — NanoGPT with attention caching
+│   │   ├── data_utils.py         # Data loading & batch sampling
+│   │   └── plotting.py           # Training-dynamics plot (imports from common)
+│   └── Tin_Sum.ipynb             # Original exploratory notebook
+├── ViT/                          # Vision Transformer experiments (coming soon)
+├── requirements.txt              # Python dependencies
+└── README.md                     # This file
 ```
+
+### `common/` — shared utilities
+
+| Module | Contents |
+|---|---|
+| `power_iteration.py` | `power_iteration()` — λ_max of the Hessian (or a subspace / preconditioned variant) via HVP power iteration |
+| `spike_analysis.py` | `plot_spike_cooccurrence()` — MAD-based spike detection & co-occurrence timeline; `print_correlations()` — Pearson & Spearman correlations between proxy pairs |
 
 ---
 
-## Quick Start
+## Quick Start (LLM / NanoGPT)
 
-### 1. Clone NanoGPT and prepare Shakespeare data
+### 1. Clone NanoGPT inside `LLM/` and prepare Shakespeare data
+
+All subsequent commands assume you are in the **repo root**.
 
 ```bash
-git clone https://github.com/karpathy/nanoGPT.git
-cd nanoGPT && python data/shakespeare_char/prepare.py && cd ..
+# From the repo root:
+git clone https://github.com/karpathy/nanoGPT.git LLM/nanoGPT
+cd LLM/nanoGPT && python data/shakespeare_char/prepare.py && cd ../..
 ```
 
 ### 2. Install dependencies
@@ -44,13 +60,14 @@ pip install -r requirements.txt
 ### 3. Train with default config
 
 ```bash
-python base_train.py
+python LLM/base_train.py data_dir=LLM/nanoGPT/data/shakespeare_char
 ```
 
 ### 4. Override flags from the command line
 
 ```bash
-python base_train.py \
+python LLM/base_train.py \
+    data_dir=LLM/nanoGPT/data/shakespeare_char \
     learning_rate=5e-4 \
     optimizer=adamw \
     max_iters=2000 \
@@ -63,14 +80,43 @@ python base_train.py \
 ### 5. Resume from a checkpoint
 
 ```bash
-python base_train.py init_from=resume out_dir=out
+python LLM/base_train.py init_from=resume out_dir=out
 ```
 
 ---
 
 ## Key Components
 
-### `configs/train_config.py` — `TrainConfig`
+### `common/power_iteration.py` — `power_iteration`
+
+Estimates **λ_max of the full Hessian** (or a projected / preconditioned
+variant) via iterated Hessian-vector products (HVPs) using
+`torch.autograd.grad` with `create_graph=True`.  No full Hessian matrix
+is materialised.  Reused by both the LLM and ViT experiment modules.
+
+### `common/spike_analysis.py`
+
+#### `plot_spike_cooccurrence(x, y, x_name, y_name, window, z_score, …)`
+Spike-timeline strip that answers: *do spikes in metric X coincide with
+spikes in metric Y?*
+
+Spikes are detected via the **MAD (Median Absolute Deviation)** method:
+a point is a spike if its residual from the local rolling median exceeds
+`z_score × MAD`.  The plot shows:
+- Blue `|`  — X-only spikes
+- Orange `|` — Y-only spikes
+- Red `×`   — joint spikes (both X and Y spike together)
+
+Returns `P(Y spike | X spike)` and the marginal baseline for statistical
+comparison.
+
+#### `print_correlations(history, name)`
+Prints Spearman and Pearson correlations between all curvature metric
+pairs (H vs H̃, H vs H_GN, H vs H_VV).
+
+---
+
+### `LLM/configs/train_config.py` — `TrainConfig`
 
 Single dataclass containing every configurable flag.  Annotated groups:
 
@@ -89,12 +135,7 @@ Single dataclass containing every configurable flag.  Annotated groups:
 
 ---
 
-### `src/helpers.py`
-
-#### `power_iteration(loss, model, max_iter, tol)`
-Estimates **λ_max of the full Hessian** via iterated Hessian-vector
-products (HVPs) using `torch.autograd.grad` with `create_graph=True`.
-No full Hessian matrix is materialised.
+### `LLM/src/helpers.py`
 
 #### `get_VV_subspace_mask(model)`
 Returns a flat binary tensor selecting only the **value-projection
@@ -119,7 +160,7 @@ populated by the patched attention forward pass.
 
 ---
 
-### `src/model.py` — `build_hooked_gpt`
+### `LLM/src/model.py` — `build_hooked_gpt`
 
 Builds a standard NanoGPT `GPT` model and applies two modifications:
 
@@ -134,7 +175,7 @@ Builds a standard NanoGPT `GPT` model and applies two modifications:
 
 ---
 
-### `src/data_utils.py`
+### `LLM/src/data_utils.py`
 
 | Function | Description |
 |---|---|
@@ -143,37 +184,7 @@ Builds a standard NanoGPT `GPT` model and applies two modifications:
 
 ---
 
-### `src/plotting.py`
-
-#### `plot_training_dynamics(histories, lrs, save_path)`
-Generates a **2×3 grid** for each optimizer run:
-- Column 0: Training loss curve
-- Column 1: All Hessian proxy metrics on a log scale, with EoS / AEoS
-  ceiling annotation
-- Column 2: Per-layer attention entropy (one line per layer, coloured by
-  depth with a viridis palette)
-
-#### `plot_spike_cooccurrence(x, y, x_name, y_name, window, z_score, …)`
-Spike-timeline strip that answers: *do spikes in metric X coincide with
-spikes in metric Y?*
-
-Spikes are detected via the **MAD (Median Absolute Deviation)** method:
-a point is a spike if its residual from the local rolling median exceeds
-`z_score × MAD`.  The plot shows:
-- Blue `|`  — X-only spikes
-- Orange `|` — Y-only spikes
-- Red `×`   — joint spikes (both X and Y spike together)
-
-Returns `P(Y spike | X spike)` and the marginal baseline for statistical
-comparison.
-
-#### `print_correlations(history, name)`
-Prints Spearman and Pearson correlations between all curvature metric
-pairs (H vs H̃, H vs H_GN, H vs H_VV).
-
----
-
-### `base_train.py`
+### `LLM/base_train.py`
 
 End-to-end training script that:
 1. Parses `TrainConfig` with optional CLI overrides
@@ -209,12 +220,14 @@ Set `wandb_log=True` to enable.  Logged metrics:
 ### Experiment A — Smooth dynamics (Spearman correlation)
 
 ```bash
-python base_train.py \
+python LLM/base_train.py \
+    data_dir=LLM/nanoGPT/data/shakespeare_char \
     optimizer=adamw learning_rate=1e-5 max_iters=800 \
     hessian_freq=3 entropy_freq=10 \
     wandb_log=True wandb_run_name=exp-A-adamw
 
-python base_train.py \
+python LLM/base_train.py \
+    data_dir=LLM/nanoGPT/data/shakespeare_char \
     optimizer=sgd learning_rate=0.002 max_iters=800 \
     hessian_freq=3 entropy_freq=10 \
     wandb_log=True wandb_run_name=exp-A-sgd
@@ -223,20 +236,22 @@ python base_train.py \
 ### Experiment B — Large-LR instability (spike co-occurrence)
 
 ```bash
-python base_train.py \
+python LLM/base_train.py \
+    data_dir=LLM/nanoGPT/data/shakespeare_char \
     optimizer=adamw learning_rate=5e-3 max_iters=100 \
     hessian_freq=1 entropy_freq=1 \
     wandb_log=True wandb_run_name=exp-B-adamw
 
-python base_train.py \
+python LLM/base_train.py \
+    data_dir=LLM/nanoGPT/data/shakespeare_char \
     optimizer=sgd learning_rate=0.5 max_iters=100 \
     hessian_freq=1 entropy_freq=1 \
     wandb_log=True wandb_run_name=exp-B-sgd
 ```
 
 After training, load `out/history.pkl` and call
-`src.plotting.plot_spike_cooccurrence` to reproduce the joint/disjoint
-spike figures.
+`common.spike_analysis.plot_spike_cooccurrence` to reproduce the
+joint/disjoint spike figures.
 
 ---
 
@@ -246,7 +261,7 @@ spike figures.
 |---|---|
 | `model.py` — `GPT`, `GPTConfig` | Base architecture; `HookedGPT` extends it |
 | `model.py` — `configure_optimizers` | AdamW with correct weight-decay splits |
-| `train.py` — cosine LR schedule | `get_lr()` function in `base_train.py` |
+| `train.py` — cosine LR schedule | `get_lr()` function in `LLM/base_train.py` |
 | `train.py` — checkpoint format | Same `ckpt.pt` dict structure |
 | `data/*/prepare.py` | Data preparation (run once; not modified) |
-| `configurator.py` — CLI override pattern | `key=value` CLI arg parsing in `base_train.py` |
+| `configurator.py` — CLI override pattern | `key=value` CLI arg parsing in `LLM/base_train.py` |
