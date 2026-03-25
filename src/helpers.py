@@ -29,10 +29,13 @@ from torch.func import functional_call, jvp, vjp
 
 
 def power_iteration(
-    loss: torch.Tensor,
+    loss: torch.Tensor | None,
     model: torch.nn.Module,
     max_iter: int = 20,
     tol: float = 1e-4,
+    vv_mask: torch.Tensor | None = None,
+    D_inv_sqrt: torch.Tensor | None = None,
+    hvp_fn: callable | None = None,
 ) -> float:
     """
     Estimate the largest eigenvalue (λ_max) of the loss Hessian via
@@ -48,40 +51,78 @@ def power_iteration(
         model:    The model whose parameters define the Hessian.
         max_iter: Number of power-iteration steps.
         tol:      Early-stop threshold on the relative eigenvalue change.
+        vv_mask:  Optional flat mask selecting a subspace (same length
+                  as the flattened parameter vector). When provided the
+                  iteration projects iterates into this subspace.
+        D_inv_sqrt: Optional preconditioner vector (flat) implementing
+                  elementwise multiplication by D^{-1/2}. When provided
+                  runs power-iteration for D^{-1/2} H D^{-1/2}.
 
     Returns:
         Estimated λ_max as a Python float.
     """
-    grads = torch.autograd.grad(
-        loss, model.parameters(), create_graph=True, retain_graph=True
-    )
-    flat_grads = torch.cat([g.reshape(-1) for g in grads])
+    # If an explicit H*v operator is provided, use it; otherwise build the
+    # default Hessian H*v operator from `loss` via autograd.
+    params = tuple(model.parameters())
 
-    v = torch.randn_like(flat_grads)
-    v = v / (v.norm() + 1e-9)
-
-    prev_lambda = None
-    flat_hvp = None  # will be assigned inside the loop
-
-    for _ in range(max_iter):
-        hvp_tuple = torch.autograd.grad(
-            flat_grads,
-            model.parameters(),
-            grad_outputs=v,
-            retain_graph=True,
+    if hvp_fn is None:
+        if loss is None:
+            raise ValueError("loss must be provided when hvp_fn is None")
+        grads = torch.autograd.grad(
+            loss, params, create_graph=True, retain_graph=True
         )
-        flat_hvp = torch.cat([g.contiguous().reshape(-1) for g in hvp_tuple])
-        lam = torch.dot(v, flat_hvp).item()
+        flat_grads = torch.cat([g.reshape(-1) for g in grads])
 
-        v = flat_hvp / (flat_hvp.norm() + 1e-9)
+        def _hvp(v: torch.Tensor) -> torch.Tensor:
+            hvp_tuple = torch.autograd.grad(flat_grads, params, grad_outputs=v, retain_graph=True)
+            return torch.cat([g.contiguous().reshape(-1) for g in hvp_tuple])
 
-        if prev_lambda is not None and abs(lam - prev_lambda) / (abs(prev_lambda) + 1e-9) < tol:
-            break
-        prev_lambda = lam
+        hvp_callable = _hvp
+    else:
+        hvp_callable = hvp_fn
 
-    # Final Rayleigh quotient
-    lambda_max = torch.dot(v, flat_hvp).item() if flat_hvp is not None else 0.0
-    return lambda_max
+    # --- Full / masked / preconditioned iterations using hvp_callable ---
+    # Choose initial vector size from one model parameter
+    sample_param = next(model.parameters())
+    n = sum(p.numel() for p in params)
+
+    if vv_mask is None and D_inv_sqrt is None:
+        v = torch.randn(n, device=sample_param.device)
+        v = v / (v.norm() + 1e-9)
+        prev_lambda = None
+        flat_hvp = None
+        for _ in range(max_iter):
+            flat_hvp = hvp_callable(v)
+            lam = torch.dot(v, flat_hvp).item()
+            v = flat_hvp / (flat_hvp.norm() + 1e-9)
+            if prev_lambda is not None and abs(lam - prev_lambda) / (abs(prev_lambda) + 1e-9) < tol:
+                break
+            prev_lambda = lam
+        return torch.dot(v, flat_hvp).item() if flat_hvp is not None else 0.0
+
+    if vv_mask is not None:
+        v = torch.randn(n, device=sample_param.device) * vv_mask.to(sample_param.device)
+        v = v / (v.norm() + 1e-9)
+        flat_hvp = None
+        for _ in range(max_iter):
+            flat_hvp = hvp_callable(v)
+            v = (flat_hvp * vv_mask.to(flat_hvp.device))
+            v = v / (v.norm() + 1e-9)
+        return torch.dot(v, flat_hvp).item() if flat_hvp is not None else 0.0
+
+    if D_inv_sqrt is not None:
+        D_inv_sqrt = D_inv_sqrt.to(sample_param.device)
+        v_prec = torch.randn(n, device=sample_param.device)
+        v_prec = v_prec / (v_prec.norm() + 1e-9)
+        step3 = None
+        for _ in range(max_iter):
+            step1 = D_inv_sqrt * v_prec
+            flat_hvp_prec = hvp_callable(step1)
+            step3 = D_inv_sqrt * flat_hvp_prec
+            v_prec = step3 / (step3.norm() + 1e-9)
+        return torch.dot(v_prec, step3).item() if step3 is not None else 0.0
+
+    return 0.0
 
 
 # ======================================================================
@@ -169,52 +210,13 @@ def get_curvature_metrics(
         Dict with keys: ``hessian``, ``prec_h``, ``hessian_vv``,
         ``gn``, ``fd``.
     """
-    grads = torch.autograd.grad(
-        loss, model.parameters(), create_graph=True, retain_graph=True
-    )
-    flat_grads = torch.cat([g.reshape(-1) for g in grads])
+    # Use the unified power_iteration helper for H, H_VV and preconditioned H
+    hessian_norm = power_iteration(loss, model, max_iter=max_iter)
 
-    # ------------------------------------------------------------------ #
-    # 1. Full Hessian λ_max  (H)
-    # ------------------------------------------------------------------ #
-    v_h = torch.randn_like(flat_grads)
-    v_h = v_h / (v_h.norm() + 1e-9)
-    flat_hvp = None
-    for _ in range(max_iter):
-        hvp = torch.autograd.grad(
-            flat_grads,
-            model.parameters(),
-            grad_outputs=v_h,
-            retain_graph=True,
-        )
-        flat_hvp = torch.cat([g.contiguous().reshape(-1) for g in hvp])
-        v_h = flat_hvp / (flat_hvp.norm() + 1e-9)
-    hessian_norm = torch.dot(v_h, flat_hvp).item() if flat_hvp is not None else 0.0
+    # Value-subspace estimate
+    hessian_vv_norm = power_iteration(loss, model, max_iter=max_iter, vv_mask=vv_mask)
 
-    # ------------------------------------------------------------------ #
-    # 2. Value-subspace Hessian  (H_VV)
-    # ------------------------------------------------------------------ #
-    v_vv = torch.randn_like(flat_grads) * vv_mask
-    norm_vv = v_vv.norm()
-    v_vv = v_vv / (norm_vv + 1e-9)
-    flat_hvp_vv = None
-    for _ in range(max_iter):
-        hvp_vv = torch.autograd.grad(
-            flat_grads,
-            model.parameters(),
-            grad_outputs=v_vv,
-            retain_graph=True,
-        )
-        flat_hvp_vv = torch.cat([g.contiguous().reshape(-1) for g in hvp_vv])
-        v_vv = flat_hvp_vv * vv_mask
-        v_vv = v_vv / (v_vv.norm() + 1e-9)
-    hessian_vv_norm = (
-        torch.dot(v_vv, flat_hvp_vv).item() if flat_hvp_vv is not None else 0.0
-    )
-
-    # ------------------------------------------------------------------ #
-    # 3. Preconditioned Hessian  (H_tilde = D^{-½} H D^{-½})
-    # ------------------------------------------------------------------ #
+    # Build D^{-1/2} preconditioner from optimizer state (if Adam-like)
     D_inv_sqrt_parts = []
     is_adam = False
     for param in model.parameters():
@@ -227,7 +229,7 @@ def get_curvature_metrics(
             beta2 = optimizer.param_groups[0]["betas"][1]
             bias_corr2 = 1.0 - beta2 ** step
             v_hat = v_sq / bias_corr2
-            adam_epsilon = 1e-7  # Adam denominator stabiliser (slightly larger than PyTorch default)
+            adam_epsilon = 1e-7
             P = torch.sqrt(v_hat) + adam_epsilon
             D_inv_sqrt_parts.append((1.0 / torch.sqrt(P)).reshape(-1))
         else:
@@ -236,32 +238,15 @@ def get_curvature_metrics(
     D_inv_sqrt = torch.cat(D_inv_sqrt_parts)
 
     if is_adam:
-        v_prec = torch.randn_like(flat_grads)
-        v_prec = v_prec / (v_prec.norm() + 1e-9)
-        step1 = v_prec  # initialise so the variable is always bound
-        step3 = None
-        flat_hvp_prec = flat_grads.new_zeros(flat_grads.shape)
-        for _ in range(max_iter):
-            step1 = D_inv_sqrt * v_prec
-            hvp_prec = torch.autograd.grad(
-                flat_grads,
-                model.parameters(),
-                grad_outputs=step1,
-                retain_graph=True,
-            )
-            flat_hvp_prec = torch.cat([g.contiguous().reshape(-1) for g in hvp_prec])
-            step3 = D_inv_sqrt * flat_hvp_prec
-            v_prec = step3 / (step3.norm() + 1e-9)
-        prec_hessian_norm = (
-            torch.dot(v_prec, step3).item() if step3 is not None else 0.0
+        prec_hessian_norm = power_iteration(
+            loss, model, max_iter=max_iter, D_inv_sqrt=D_inv_sqrt
         )
     else:
         prec_hessian_norm = hessian_norm
 
     # Free second-order graph before Gauss-Newton (uses its own graph)
-    if is_adam:
-        del v_prec, step1, flat_hvp_prec, step3
-    del grads, flat_grads, v_h, flat_hvp, D_inv_sqrt, flat_hvp_vv, v_vv
+    # cleanup: avoid deleting names that aren't in this scope (leftover from
+    # earlier refactor). Just clear CUDA cache to free temporary memory.
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
@@ -273,17 +258,14 @@ def get_curvature_metrics(
         logits, _ = functional_call(model, p_dict, (X, Y))
         return logits
 
-    flat_params = torch.cat([p.reshape(-1) for p in model.parameters()])
-    v_g = torch.randn_like(flat_params)
-    v_g = v_g / v_g.norm()
-    flat_gn_v = None
-
-    for _ in range(max_iter):
+    # Build an H*v operator for the Gauss-Newton matrix: given a flat vector
+    # v (over params), return J^T H_L J v as a flat tensor.
+    def gn_hvp(v_flat: torch.Tensor) -> torch.Tensor:
         tangents: dict[str, torch.Tensor] = {}
         offset = 0
         for k, p in params_dict.items():
             numel = p.numel()
-            tangents[k] = v_g[offset : offset + numel].view_as(p)
+            tangents[k] = v_flat[offset : offset + numel].view_as(p)
             offset += numel
 
         out_logits, Jv = jvp(_fwd, (params_dict,), (tangents,))
@@ -298,14 +280,10 @@ def get_curvature_metrics(
         _, vjp_fn = vjp(_fwd, params_dict)
         gn_v_dict = vjp_fn(H_L_Jv.detach())[0]
 
-        flat_gn_v = torch.cat(
-            [gn_v_dict[k].contiguous().reshape(-1) for k in params_dict.keys()]
-        )
-        v_g = flat_gn_v / (flat_gn_v.norm() + 1e-9)
+        flat = torch.cat([gn_v_dict[k].contiguous().reshape(-1) for k in params_dict.keys()])
+        return flat
 
-        del out_logits, Jv, l, grad_l, H_L_Jv, gn_v_dict, tangents
-
-    gn_norm = torch.dot(v_g, flat_gn_v).item() if flat_gn_v is not None else 0.0
+    gn_norm = power_iteration(None, model, max_iter=max_iter, hvp_fn=gn_hvp)
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
