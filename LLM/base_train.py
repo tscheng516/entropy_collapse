@@ -18,11 +18,11 @@ Usage
 -----
 Default config (edit configs/train_config.py or pass overrides on CLI)::
 
-    python base_train.py
+    python LLM/base_train.py
 
 Override individual flags::
 
-    python base_train.py learning_rate=5e-4 optimizer=sgd max_iters=2000
+    python LLM/base_train.py learning_rate=5e-4 optimizer=sgd max_iters=2000
 
 The override syntax reuses the NanoGPT ``configurator.py`` convention:
 any ``key=value`` argument is eval'd and injected into the config
@@ -30,22 +30,28 @@ dataclass.  Pass ``wandb_log=True`` to enable W&B tracking.
 
 Setup
 -----
-1. Clone NanoGPT and prepare data::
+1. Clone NanoGPT inside the LLM/ directory and prepare data::
 
+    cd LLM
     git clone https://github.com/karpathy/nanoGPT.git
-    cd nanoGPT && python data/shakespeare_char/prepare.py && cd ..
+    cd nanoGPT && python data/shakespeare_char/prepare.py && cd ../..
 
 2. Install dependencies::
 
     pip install -r requirements.txt
 
-3. Run::
+3. Run (from the repo root)::
 
-    python base_train.py
+    python LLM/base_train.py
 
     or
 
-    torchrun --nproc_per_node=4 python base_train.py init_from=scratch optimizer=adamw learning_rate=1e-3 max_iters=1000 wandb_log=True
+    torchrun --nproc_per_node=4 LLM/base_train.py init_from=scratch optimizer=adamw learning_rate=1e-3 max_iters=1000 wandb_log=True data_dir=LLM/nanoGPT/data/shakespeare_char
+
+Note: ``data_dir`` in TrainConfig defaults to ``"nanoGPT/data/shakespeare_char"``
+(relative to the working directory).  If you run from the repo root, set::
+
+    python LLM/base_train.py data_dir=LLM/nanoGPT/data/shakespeare_char
 """
 
 from __future__ import annotations
@@ -64,9 +70,20 @@ import torch
 import torch.distributed as dist
 
 # ---------------------------------------------------------------------------
-# 0.  Locate NanoGPT and add to sys.path so we can import model.py
+# 0.  Path setup
+#     a) Add repo root to sys.path so that the ``common`` package is importable.
+#     b) Locate NanoGPT (expected at LLM/nanoGPT/) and add to sys.path.
 # ---------------------------------------------------------------------------
-NANOGPT_DIR = os.path.join(os.path.dirname(__file__), "nanoGPT")
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(_SCRIPT_DIR)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+# Add the LLM/ directory so that ``configs`` and ``src`` sub-packages resolve.
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+NANOGPT_DIR = os.path.join(_SCRIPT_DIR, "nanoGPT")
 if NANOGPT_DIR not in sys.path:
     sys.path.insert(0, NANOGPT_DIR)
 
@@ -77,7 +94,7 @@ from configs.train_config import TrainConfig  # noqa: E402
 
 cfg = TrainConfig()
 
-# NanoGPT-style CLI overrides: python base_train.py learning_rate=1e-4 ...
+# NanoGPT-style CLI overrides: python LLM/base_train.py learning_rate=1e-4 ...
 import ast
 
 for arg in sys.argv[1:]:
