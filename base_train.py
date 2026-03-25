@@ -57,6 +57,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend for headless servers
 import numpy as np
 import torch
+import torch.distributed as dist
 
 # ---------------------------------------------------------------------------
 # 0.  Locate NanoGPT and add to sys.path so we can import model.py
@@ -88,6 +89,35 @@ for arg in sys.argv[1:]:
         else:
             print(f"[warn] unknown config key '{key}', ignoring.")
 
+# --- argparse for common overrides (works with torchrun) ------------
+import argparse
+
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("--init_from", type=str, help="checkpoint path or 'scratch'/'resume'")
+parser.add_argument("--optimizer", type=str, help="optimizer name (adamw or sgd)")
+parser.add_argument("--learning_rate", type=float, help="peak learning rate")
+parser.add_argument("--max_iters", type=int, help="number of training iterations")
+parser.add_argument("--wandb_log", type=str, help="enable wandb logging (true/false)")
+parser.add_argument("--z_score", type=float, help="MAD z-score for spike detection/plots")
+known_args, _ = parser.parse_known_args()
+
+def _maybe_set(attr, val, conv=lambda x: x):
+    if val is None:
+        return
+    try:
+        setattr(cfg, attr, conv(val))
+    except Exception:
+        print(f"[warn] failed to set cfg.{attr} from CLI value {val}")
+
+_maybe_set("init_from", known_args.init_from)
+_maybe_set("optimizer", known_args.optimizer)
+_maybe_set("learning_rate", known_args.learning_rate)
+_maybe_set("max_iters", known_args.max_iters)
+if known_args.wandb_log is not None:
+    sval = str(known_args.wandb_log).lower()
+    _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
+_maybe_set("z_score", known_args.z_score)
+
 # ---------------------------------------------------------------------------
 # 2.  Reproducibility & device
 # ---------------------------------------------------------------------------
@@ -109,17 +139,52 @@ ctx = (
 
 os.makedirs(cfg.out_dir, exist_ok=True)
 
+# --- Distributed setup (torchrun) -------------------------------------
+# Detect multi-process launch via WORLD_SIZE; init process group and set
+# device / local rank accordingly. Non-distributed runs fall back to
+# single-process behaviour.
+use_ddp = False
+rank = 0
+world_size = 1
+local_rank = 0
+
+if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+    use_ddp = True
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend)
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    # set CUDA device for this process
+    if torch.cuda.is_available() and cfg.device.startswith("cuda"):
+        torch.cuda.set_device(local_rank)
+        device = f"cuda:{local_rank}"
+
 # Create a per-run timestamped subdirectory to avoid overwriting previous
-# runs. Keep the original `cfg.out_dir` path when resuming so callers can
-# continue an existing run.
+# runs. When distributed, the rank 0 process chooses the run id and the
+# remainder receive it via broadcast so all ranks share the same folder.
 if cfg.init_from == "resume":
     run_out_dir = cfg.out_dir
 else:
-    run_id = time.strftime("%Y%m%d-%H%M%S")
-    run_out_dir = os.path.join(cfg.out_dir, run_id)
-    os.makedirs(run_out_dir, exist_ok=True)
+    if use_ddp:
+        if rank == 0:
+            run_id = time.strftime("%Y%m%d-%H%M%S")
+        else:
+            run_id = None
+        run_id_list = [run_id]
+        dist.broadcast_object_list(run_id_list, src=0)
+        run_id = run_id_list[0]
+        run_out_dir = os.path.join(cfg.out_dir, run_id)
+        if rank == 0:
+            os.makedirs(run_out_dir, exist_ok=True)
+        dist.barrier()
+    else:
+        run_id = time.strftime("%Y%m%d-%H%M%S")
+        run_out_dir = os.path.join(cfg.out_dir, run_id)
+        os.makedirs(run_out_dir, exist_ok=True)
 
-print(f"[io] outputs → {run_out_dir}")
+if rank == 0:
+    print(f"[io] outputs → {run_out_dir}")
 
 # ---------------------------------------------------------------------------
 # 3.  Data
@@ -213,6 +278,19 @@ if cfg.compile:
     print("[model] compiling with torch.compile (disable for Hessian metrics)")
     model = torch.compile(model)
 
+# If running under torchrun, wrap the model in DistributedDataParallel so
+# gradients are synced and parameters are consistent across processes.
+if use_ddp:
+    if torch.cuda.is_available() and cfg.device.startswith("cuda"):
+        model.to(device)
+        model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[local_rank], output_device=local_rank
+        )
+    else:
+        model = torch.nn.parallel.DistributedDataParallel(model)
+else:
+    model.to(device)
+
 # ---------------------------------------------------------------------------
 # 5.  Optimiser
 # ---------------------------------------------------------------------------
@@ -262,12 +340,12 @@ def get_lr(it: int) -> float:
 # ---------------------------------------------------------------------------
 if cfg.wandb_log:
     import wandb
-
-    wandb.init(
-        project=cfg.wandb_project,
-        name=cfg.wandb_run_name or None,
-        config=vars(cfg),
-    )
+    if not use_ddp or rank == 0:
+        wandb.init(
+            project=cfg.wandb_project,
+            name=cfg.wandb_run_name or None,
+            config=vars(cfg),
+        )
 
 # ---------------------------------------------------------------------------
 # 8.  Helper: Hessian metrics & entropy
@@ -311,9 +389,17 @@ def _save_checkpoint(suffix: str = "ckpt") -> None:
         },
         "config": vars(cfg),
     }
-    path = os.path.join(run_out_dir, f"{suffix}.pt")
-    torch.save(checkpoint, path)
-    print(f"[ckpt] saved → {path}")
+    # Only the rank-0 process writes checkpoints to avoid concurrent
+    # file writes when running under torchrun / DDP.
+    if not use_ddp or rank == 0:
+        # If wrapped in DDP, the underlying module holds the real params.
+        sd = checkpoint["model"]
+        if use_ddp and hasattr(model, "module"):
+            sd = model.module.state_dict()
+            checkpoint["model"] = sd
+        path = os.path.join(run_out_dir, f"{suffix}.pt")
+        torch.save(checkpoint, path)
+        print(f"[ckpt] saved → {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +438,7 @@ for iter_num in range(iter_num, cfg.max_iters):
             f"[eval] iter {iter_num:5d} | val_loss {val_loss:.4f} "
             f"| best {best_val_loss:.4f}"
         )
-        if cfg.wandb_log:
+        if cfg.wandb_log and (not use_ddp or rank == 0):
             wandb.log({"val/loss": val_loss}, step=iter_num)
 
         if val_loss < best_val_loss or cfg.always_save_checkpoint:
@@ -443,7 +529,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         print(f"iter {iter_num:5d} | loss {loss_val:.4f} | lr {lr:.2e}  | dt {dt*1000:.1f}ms")
         if iter_num % cfg.hessian_freq == 0:
             print(f"| H {curvature['hessian']:.1f} | H_VV {curvature['hessian_vv']:.1f} | GN {curvature['gn']:.1f}")
-        if cfg.wandb_log:
+        if cfg.wandb_log and (not use_ddp or rank == 0):
             log_dict: dict[str, float | int] = {
                 "train/loss": loss_val,
                 "train/lr": lr,
@@ -472,33 +558,38 @@ for iter_num in range(iter_num, cfg.max_iters):
 # ---------------------------------------------------------------------------
 _save_checkpoint("final_ckpt")
 
-history_path = os.path.join(run_out_dir, "history.pkl")
-with open(history_path, "wb") as f:
-    pickle.dump(history, f)
-print(f"[done] history saved → {history_path}")
+# Only the main process writes the history file and final plots when
+# running distributed to avoid races and duplicate outputs.
+if not use_ddp or rank == 0:
+    history_path = os.path.join(run_out_dir, "history.pkl")
+    with open(history_path, "wb") as f:
+        pickle.dump(history, f)
+    print(f"[done] history saved → {history_path}")
 
-if cfg.wandb_log:
-    wandb.finish()
+    if cfg.wandb_log:
+        wandb.finish()
 
 # ---------------------------------------------------------------------------
 # 11.  Post-training plots (saved to out_dir, not shown interactively)
 # ---------------------------------------------------------------------------
-from src.plotting import plot_training_dynamics, plot_spike_cooccurrence  # noqa: E402
 
-fig = plot_training_dynamics(
-    histories={"Run": history},
-    lrs={"Run": cfg.learning_rate},
-    save_path=os.path.join(run_out_dir, "training_dynamics.png"),
-)
-print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
+if not use_ddp or rank == 0:
+    from src.plotting import plot_training_dynamics, plot_spike_cooccurrence  # noqa: E402
 
-fig2, res = plot_spike_cooccurrence(
-    history["hessian"],
-    history["hessian_vv"],
-    x_name="Exact H",
-    y_name="H_VV",
-    window=15,
-    z_score=10.0,
-    save_path=os.path.join(run_out_dir, "spike_cooccurrence_H_vs_HVV.png"),
-)
-print(f"[plot] spike co-occurrence: P(H_VV spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}")
+    fig = plot_training_dynamics(
+        histories={"Run": history},
+        lrs={"Run": cfg.learning_rate},
+        save_path=os.path.join(run_out_dir, "training_dynamics.png"),
+    )
+    print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
+
+    fig2, res = plot_spike_cooccurrence(
+        history["hessian"],
+        history["hessian_vv"],
+        x_name="Exact H",
+        y_name="H_VV",
+        window=15,
+        z_score=cfg.z_score,
+        save_path=os.path.join(run_out_dir, "spike_cooccurrence_H_vs_HVV.png"),
+    )
+    print(f"[plot] spike co-occurrence: P(H_VV spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}")
