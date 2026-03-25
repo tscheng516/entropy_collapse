@@ -42,6 +42,10 @@ Setup
 3. Run::
 
     python base_train.py
+
+    or
+
+    torchrun --nproc_per_node=4 python base_train.py init_from=scratch optimizer=adamw learning_rate=1e-3 max_iters=1000 wandb_log=False
 """
 
 from __future__ import annotations
