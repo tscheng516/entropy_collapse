@@ -5,9 +5,6 @@ All second-order quantities are estimated without materialising the full
 Hessian matrix; instead we use power iteration on Hessian-vector
 products (HVPs) computed cheaply via PyTorch's ``autograd.grad``.
 
-The generic ``power_iteration`` routine lives in ``common.power_iteration``
-and is shared across model families (LLM, ViT, …).
-
 Functions
 ---------
 get_VV_subspace_mask     — Binary mask selecting value-projection params.
@@ -23,8 +20,6 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 from torch.func import functional_call, jvp, vjp
-
-from common.power_iteration import power_iteration
 
 
 # ======================================================================
@@ -112,13 +107,47 @@ def get_curvature_metrics(
         Dict with keys: ``hessian``, ``prec_h``, ``hessian_vv``,
         ``gn``, ``fd``.
     """
-    # Use the unified power_iteration helper for H, H_VV and preconditioned H
-    hessian_norm = power_iteration(loss, model, max_iter=max_iter)
+    # Compute gradients once and reuse across all three power iterations.
+    grads = torch.autograd.grad(
+        loss, model.parameters(), create_graph=True, retain_graph=True
+    )
+    flat_grads = torch.cat([g.reshape(-1) for g in grads])
 
-    # Value-subspace estimate
-    hessian_vv_norm = power_iteration(loss, model, max_iter=max_iter, vv_mask=vv_mask)
+    # ------------------------------------------------------------------ #
+    # 1. Exact Hessian Power Iteration (H)
+    # ------------------------------------------------------------------ #
+    v_h = torch.randn_like(flat_grads)
+    v_h = v_h / (v_h.norm() + 1e-9)
+    flat_hvp: torch.Tensor | None = None
+    for _ in range(max_iter):
+        hvp = torch.autograd.grad(
+            flat_grads, model.parameters(), grad_outputs=v_h, retain_graph=True
+        )
+        flat_hvp = torch.cat([g.contiguous().reshape(-1) for g in hvp])
+        v_h = flat_hvp / (flat_hvp.norm() + 1e-9)
+    hessian_norm = torch.dot(v_h, flat_hvp).item() if flat_hvp is not None else 0.0
 
-    # Build D^{-1/2} preconditioner from optimizer state (if Adam-like)
+    # ------------------------------------------------------------------ #
+    # 2. Value-Subspace Power Iteration (H_VV)
+    # ------------------------------------------------------------------ #
+    vv_mask_dev = vv_mask.to(flat_grads.device)
+    v_vv = torch.randn_like(flat_grads) * vv_mask_dev
+    v_vv = v_vv / (v_vv.norm() + 1e-9)
+    flat_hvp_vv: torch.Tensor | None = None
+    for _ in range(max_iter):
+        hvp_vv = torch.autograd.grad(
+            flat_grads, model.parameters(), grad_outputs=v_vv, retain_graph=True
+        )
+        flat_hvp_vv = torch.cat([g.contiguous().reshape(-1) for g in hvp_vv])
+        v_vv = flat_hvp_vv * vv_mask_dev
+        v_vv = v_vv / (v_vv.norm() + 1e-9)
+    hessian_vv_norm = (
+        torch.dot(v_vv, flat_hvp_vv).item() if flat_hvp_vv is not None else 0.0
+    )
+
+    # ------------------------------------------------------------------ #
+    # 3. Preconditioned Hessian Power Iteration (H_tilde)
+    # ------------------------------------------------------------------ #
     D_inv_sqrt_parts = []
     is_adam = False
     for param in model.parameters():
@@ -140,12 +169,26 @@ def get_curvature_metrics(
     D_inv_sqrt = torch.cat(D_inv_sqrt_parts)
 
     if is_adam:
-        prec_hessian_norm = power_iteration(
-            loss, model, max_iter=max_iter, D_inv_sqrt=D_inv_sqrt
+        v_prec = torch.randn_like(flat_grads)
+        v_prec = v_prec / (v_prec.norm() + 1e-9)
+        step3: torch.Tensor | None = None
+        for _ in range(max_iter):
+            step1 = D_inv_sqrt * v_prec
+            hvp_prec = torch.autograd.grad(
+                flat_grads, model.parameters(), grad_outputs=step1, retain_graph=True
+            )
+            flat_hvp_prec = torch.cat([g.contiguous().reshape(-1) for g in hvp_prec])
+            step3 = D_inv_sqrt * flat_hvp_prec
+            v_prec = step3 / (step3.norm() + 1e-9)
+        prec_hessian_norm = (
+            torch.dot(v_prec, step3).item() if step3 is not None else 0.0
         )
     else:
         prec_hessian_norm = hessian_norm
 
+    del grads, flat_grads, v_h, flat_hvp, v_vv, flat_hvp_vv, D_inv_sqrt
+    if is_adam:
+        del v_prec, step3
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
@@ -157,14 +200,16 @@ def get_curvature_metrics(
         logits, _ = functional_call(model, p_dict, (X, Y))
         return logits
 
-    # Build an H*v operator for the Gauss-Newton matrix: given a flat vector
-    # v (over params), return J^T H_L J v as a flat tensor.
-    def gn_hvp(v_flat: torch.Tensor) -> torch.Tensor:
+    flat_params = torch.cat([p.reshape(-1) for p in model.parameters()])
+    v_g = torch.randn_like(flat_params)
+    v_g = v_g / (v_g.norm() + 1e-9)
+    flat_gn_v: torch.Tensor | None = None
+    for _ in range(max_iter):
         tangents: dict[str, torch.Tensor] = {}
         offset = 0
         for k, p in params_dict.items():
             numel = p.numel()
-            tangents[k] = v_flat[offset : offset + numel].view_as(p)
+            tangents[k] = v_g[offset : offset + numel].view_as(p)
             offset += numel
 
         out_logits, Jv = jvp(_fwd, (params_dict,), (tangents,))
@@ -179,10 +224,14 @@ def get_curvature_metrics(
         _, vjp_fn = vjp(_fwd, params_dict)
         gn_v_dict = vjp_fn(H_L_Jv.detach())[0]
 
-        flat = torch.cat([gn_v_dict[k].contiguous().reshape(-1) for k in params_dict.keys()])
-        return flat
+        flat_gn_v = torch.cat(
+            [gn_v_dict[k].contiguous().reshape(-1) for k in params_dict.keys()]
+        )
+        v_g = flat_gn_v / (flat_gn_v.norm() + 1e-9)
 
-    gn_norm = power_iteration(None, model, max_iter=max_iter, hvp_fn=gn_hvp)
+        del out_logits, Jv, l, grad_l, H_L_Jv, gn_v_dict, tangents
+
+    gn_norm = torch.dot(v_g, flat_gn_v).item() if flat_gn_v is not None else 0.0
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #

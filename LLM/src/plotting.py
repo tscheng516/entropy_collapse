@@ -39,7 +39,8 @@ def plot_training_dynamics(
                     ``gn``, ``fd``, ``entropy``.
                     ``entropy`` values are lists of per-layer floats.
         lrs:        Dict mapping optimizer name to the peak LR used
-                    (for annotating the EoS ceiling lines).
+                    (kept for API compatibility; no longer used for
+                    ceiling-line annotation).
         save_path:  If provided, save the figure to this path.
 
     Returns:
@@ -54,7 +55,6 @@ def plot_training_dynamics(
 
     for row, name in enumerate(opt_names):
         h = histories[name]
-        lr = lrs.get(name, 1e-3)
         color = "blue" if "adam" in name.lower() else "orange"
 
         # Normalize supported key names and ensure numpy arrays for plotting
@@ -113,21 +113,6 @@ def plot_training_dynamics(
                     linewidth=2,
                     label=r"Precond. Hessian ($\tilde{H}$)",
                 )
-            ceiling = 38.0 / lr
-            ax.axhline(
-                y=ceiling,
-                color="gray",
-                linestyle=":",
-                label=f"AEoS ceiling (38/η = {ceiling:.1f})",
-            )
-        else:
-            ceiling = 2.0 / lr
-            ax.axhline(
-                y=ceiling,
-                color="gray",
-                linestyle=":",
-                label=f"EoS ceiling (2/η = {ceiling:.1f})",
-            )
         gn_arr = _as1d("gn")
         if gn_arr.size:
             ax.plot(
@@ -148,7 +133,7 @@ def plot_training_dynamics(
                 label=r"Value Subspace ($H_{VV}$)",
             )
         ax.set_yscale("log")
-        ax.set_title(f"{name} Hessian Proxies")
+        ax.set_title(f"{name} Hessian proxies")
         ax.set_xlabel("Iteration")
         ax.set_ylabel("λ_max estimate")
         ax.legend(fontsize="small")
