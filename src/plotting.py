@@ -159,7 +159,7 @@ def plot_spike_cooccurrence(
     x_name: str = "X",
     y_name: str = "Y",
     window: int = 15,
-    z_score: float = 3.0,
+    z_score: float = 10.0,
     log_scale: bool = True,
     save_path: str | None = None,
 ) -> tuple[plt.Figure, dict]:

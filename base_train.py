@@ -418,11 +418,9 @@ for iter_num in range(iter_num, cfg.max_iters):
     if iter_num % cfg.log_interval == 0:
         dt = time.time() - t0
         t0 = time.time()
-        print(
-            f"iter {iter_num:5d} | loss {loss_val:.4f} | lr {lr:.2e} "
-            f"| H {curvature['hessian']:.1f} | H_VV {curvature['hessian_vv']:.1f} "
-            f"| GN {curvature['gn']:.1f} | dt {dt*1000:.1f}ms"
-        )
+        print(f"iter {iter_num:5d} | loss {loss_val:.4f} | lr {lr:.2e}  | dt {dt*1000:.1f}ms")
+        if iter_num % cfg.hessian_freq == 0:
+            print(f"| H {curvature['hessian']:.1f} | H_VV {curvature['hessian_vv']:.1f} | GN {curvature['gn']:.1f}")
         if cfg.wandb_log:
             log_dict: dict[str, float | int] = {
                 "train/loss": loss_val,

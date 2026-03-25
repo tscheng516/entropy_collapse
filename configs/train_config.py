@@ -41,7 +41,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Weights & Biases
     # ------------------------------------------------------------------ #
-    wandb_log: bool = False
+    wandb_log: bool = True
     """Enable Weights & Biases logging."""
 
     wandb_project: str = "entropy-collapse"
@@ -104,7 +104,7 @@ class TrainConfig:
     learning_rate: float = 1e-3
     """Peak learning rate."""
 
-    max_iters: int = 5000
+    max_iters: int = 1000
     """Total number of training iterations."""
 
     weight_decay: float = 1e-2
@@ -133,7 +133,7 @@ class TrainConfig:
     warmup_iters: int = 100
     """Number of linear warm-up iterations."""
 
-    lr_decay_iters: int = 5000
+    lr_decay_iters: int = 1000
     """Decay LR over this many iterations (should equal max_iters)."""
 
     min_lr: float = 1e-5
