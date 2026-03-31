@@ -67,8 +67,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 # ---------------------------------------------------------------------------
-# 0.  Path setup — add repo root so ``common`` is importable; add ViT/ so
-#     ``configs`` and ``src`` sub-packages resolve.
+# 0.  Path setup — add ViT/ so ``configs`` and ``src`` sub-packages resolve.
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(_SCRIPT_DIR)

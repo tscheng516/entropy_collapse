@@ -2,8 +2,8 @@
 
 This repository validates loss landscape sharpness (via the spectral norm
 of the Hessian and its proxies) and confirms that the proxies track each
-other closely.  Experiments are organised by model family so that shared
-analysis code can be reused cleanly.
+other closely.  Experiments are organised by model family, each with its
+own self-contained analysis helpers.
 
 ---
 
@@ -11,10 +11,6 @@ analysis code can be reused cleanly.
 
 ```
 entropy_collapse/
-├── common/                       # Shared analysis utilities (model-agnostic)
-│   ├── power_iteration.py        # λ_max estimation via Hessian-vector products
-│   └── spike_analysis.py         # MAD spike detection, co-occurrence plot,
-│                                 #   Pearson / Spearman correlation helpers
 ├── LLM/                          # NanoGPT entropy-collapse experiments
 │   ├── base_train.py             # Main training + checkpointing entry-point
 │   ├── configs/
@@ -23,19 +19,27 @@ entropy_collapse/
 │   │   ├── helpers.py            # Curvature helpers & attention entropy
 │   │   ├── model.py              # HookedGPT — NanoGPT with attention caching
 │   │   ├── data_utils.py         # Data loading & batch sampling
-│   │   └── plotting.py           # Training-dynamics plot (imports from common)
+│   │   └── plotting.py           # Training-dynamics plot, MAD spike detection,
+│   │                             #   and Spearman/Pearson correlation helpers
 │   └── Tin_Sum.ipynb             # Original exploratory notebook
-├── ViT/                          # Vision Transformer experiments (coming soon)
+├── ViT/                          # Vision Transformer experiments
+│   ├── base_train.py             # Main training + checkpointing entry-point
+│   ├── configs/
+│   │   └── train_config.py       # All experiment flags (qk_norm, dataset, …)
+│   └── src/
+│       ├── helpers.py            # Curvature helpers & attention entropy
+│       ├── model.py              # HookedViT — timm ViT with attention caching
+│       ├── data_utils.py         # CIFAR-10/100 / ImageNet data loaders
+│       └── plotting.py           # Training-dynamics plot, MAD spike detection,
+│                                 #   and Spearman/Pearson correlation helpers
 ├── requirements.txt              # Python dependencies
 └── README.md                     # This file
 ```
 
-### `common/` — shared utilities
-
-| Module | Contents |
-|---|---|
-| `power_iteration.py` | `power_iteration()` — λ_max of the Hessian (or a subspace / preconditioned variant) via HVP power iteration |
-| `spike_analysis.py` | `plot_spike_cooccurrence()` — MAD-based spike detection & co-occurrence timeline; `print_correlations()` — Pearson & Spearman correlations between proxy pairs |
+Each `src/plotting.py` is fully self-contained — spike detection and
+correlation utilities are inlined directly rather than imported from a
+shared package.  This keeps the LLM and ViT experiments independent and
+easy to adapt.
 
 ---
 
@@ -87,25 +91,21 @@ python LLM/base_train.py init_from=resume out_dir=out
 
 ## Key Components
 
-### `common/power_iteration.py` — `power_iteration`
+### `LLM/src/plotting.py` / `ViT/src/plotting.py`
 
-Estimates **λ_max of the full Hessian** (or a projected / preconditioned
-variant) via iterated Hessian-vector products (HVPs) using
-`torch.autograd.grad` with `create_graph=True`.  No full Hessian matrix
-is materialised.  Reused by both the LLM and ViT experiment modules.
-
-### `common/spike_analysis.py`
+Each module is self-contained and provides three utilities:
 
 #### `plot_spike_cooccurrence(x, y, x_name, y_name, window, z_score, …)`
 Spike-timeline strip that answers: *do spikes in metric X coincide with
 spikes in metric Y?*
 
-Spikes are detected via the **MAD (Median Absolute Deviation)** method:
+Spikes are detected via the **MAD (Median Absolute Deviation)** method —
+matching the `conditional_exceedance_local` function in `Tin_Sum.ipynb`:
 a point is a spike if its residual from the local rolling median exceeds
 `z_score × MAD`.  The plot shows:
 - Blue `|`  — X-only spikes
-- Orange `|` — Y-only spikes
 - Red `×`   — joint spikes (both X and Y spike together)
+- Orange `|` — Y-only spikes
 
 Returns `P(Y spike | X spike)` and the marginal baseline for statistical
 comparison.
@@ -114,9 +114,13 @@ comparison.
 Prints Spearman and Pearson correlations between all curvature metric
 pairs (H vs H̃, H vs H_GN, H vs H_VV).
 
+#### `plot_training_dynamics(histories, lrs, save_path)`
+2×6-panel grid: training loss, Hessian proxies (H, H̃, H_GN, H_VV),
+per-layer attention entropy, and three pairwise proxy scatter plots.
+
 ---
 
-### `LLM/configs/train_config.py` — `TrainConfig`
+### `LLM/configs/train_config.py` / `ViT/configs/train_config.py` — `TrainConfig`
 
 Single dataclass containing every configurable flag.  Annotated groups:
 
@@ -124,8 +128,8 @@ Single dataclass containing every configurable flag.  Annotated groups:
 |---|---|
 | **I/O** | `out_dir`, `checkpoint_interval`, `init_from` |
 | **W&B** | `wandb_log`, `wandb_project`, `wandb_run_name` |
-| **Data** | `data_dir`, `batch_size`, `block_size` |
-| **Architecture** | `n_layer`, `n_head`, `n_embd`, `vocab_size` |
+| **Data** | `data_dir`, `batch_size`, `block_size` (LLM) / `dataset`, `img_size` (ViT) |
+| **Architecture** | `n_layer`, `n_head`, `n_embd` (LLM) / `model_name`, `qk_norm` (ViT) |
 | **Init** | `init_std`, `use_scaled_init` |
 | **Optimiser** | `optimizer`, `learning_rate`, `beta1/2`, `eps`, `grad_clip` |
 | **LR schedule** | `decay_lr`, `warmup_iters`, `lr_decay_iters`, `min_lr` |
@@ -135,11 +139,11 @@ Single dataclass containing every configurable flag.  Annotated groups:
 
 ---
 
-### `LLM/src/helpers.py`
+### `LLM/src/helpers.py` / `ViT/src/helpers.py`
 
 #### `get_VV_subspace_mask(model)`
 Returns a flat binary tensor selecting only the **value-projection
-parameters** (`W_V` slice) of every fused `c_attn` attention layer.
+parameters** (`W_V` slice) of every fused attention layer.
 Used to restrict power iteration to the value subspace (H_VV).
 
 #### `get_curvature_metrics(model, optimizer, X, Y, loss, vv_mask, …)`
@@ -175,6 +179,16 @@ Builds a standard NanoGPT `GPT` model and applies two modifications:
 
 ---
 
+### `ViT/src/model.py` — `build_hooked_vit`
+
+Builds a timm ViT model with the same two modifications plus:
+
+3. **Optional QK normalisation** — controlled by `qk_norm` (default
+   `False`, matching the NanoGPT / LLM experiment setup where no QK-norm
+   is applied).
+
+---
+
 ### `LLM/src/data_utils.py`
 
 | Function | Description |
@@ -184,12 +198,12 @@ Builds a standard NanoGPT `GPT` model and applies two modifications:
 
 ---
 
-### `LLM/base_train.py`
+### `LLM/base_train.py` / `ViT/base_train.py`
 
 End-to-end training script that:
 1. Parses `TrainConfig` with optional CLI overrides
-2. Memory-maps training/validation data
-3. Builds `HookedGPT` (fresh / resume / fine-tune)
+2. Loads training/validation data
+3. Builds the model (fresh / resume / fine-tune)
 4. Sets up AdamW or SGD with a cosine LR schedule
 5. Runs the training loop, emitting metrics to stdout and W&B
 6. Saves periodic checkpoints to `out_dir/`
@@ -250,8 +264,8 @@ python LLM/base_train.py \
 ```
 
 After training, load `out/history.pkl` and call
-`common.spike_analysis.plot_spike_cooccurrence` to reproduce the
-joint/disjoint spike figures.
+`src.plotting.plot_spike_cooccurrence` to reproduce the joint/disjoint
+spike figures.
 
 ---
 
