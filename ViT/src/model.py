@@ -9,15 +9,29 @@ Additions over the base timm ViT:
   * Flash / fused attention is **disabled** on every block; the explicit
     softmax path is required for (a) caching attention matrices and (b)
     second-order gradient computations via ``torch.autograd``.
+  * Optional QK normalisation (``qk_norm``).  The default is ``False``,
+    which matches the NanoGPT / LLM experiment setup where no QK-norm is
+    applied.  Set ``qk_norm=True`` to install per-head LayerNorm on the
+    query and key projections (timm's native ``qk_norm`` feature).
 
 Usage::
 
     from src.model import build_hooked_vit
+
+    # NanoGPT-parity — no QK norm (default)
     model = build_hooked_vit(
         model_name="vit_small_patch16_224",
         num_classes=10,
         init_std=0.002,
         use_scaled_init=True,
+        qk_norm=False,
+    )
+
+    # With QK norm
+    model = build_hooked_vit(
+        model_name="vit_small_patch16_224",
+        num_classes=10,
+        qk_norm=True,
     )
 """
 
@@ -43,7 +57,7 @@ def _patched_attn_forward(
       2. Caches the attention weight tensor as ``self.last_att`` for
          downstream entropy measurements.
 
-    The signature matches timm ≥ 1.0 (which passes ``attn_mask`` and
+    The signature matches timm ≥ 0.9 (which passes ``attn_mask`` and
     ``is_causal`` from the enclosing Block) and is backward-compatible
     with older timm releases.
 
@@ -104,6 +118,7 @@ def build_hooked_vit(
     img_size: int = 224,
     init_std: float = 0.002,
     use_scaled_init: bool = True,
+    qk_norm: bool = False,
     device: str = "cuda",
 ) -> torch.nn.Module:
     """
@@ -114,6 +129,7 @@ def build_hooked_vit(
       * Caches the attention weight matrix as ``block.attn.last_att`` after
         each forward pass (used by ``get_attention_entropy``).
       * Optionally re-initialises weights with a small std (``init_std``).
+      * Applies QK normalisation only when ``qk_norm=True``.
 
     Args:
         model_name:       timm model string (default: ``'vit_small_patch16_224'``).
@@ -126,6 +142,10 @@ def build_hooked_vit(
         use_scaled_init:  Scale each attention output-projection (``attn.proj``)
                           by ``init_std / sqrt(2 * depth)`` — ViT analogue of
                           NanoGPT residual-depth scaling.
+        qk_norm:          If ``False`` (default), ``q_norm`` and ``k_norm`` are
+                          ``Identity`` — matching the NanoGPT / LLM experiment
+                          setup.  If ``True``, timm installs per-head LayerNorm
+                          on the query and key projections.
         device:           Target device string.
 
     Returns:
@@ -138,6 +158,7 @@ def build_hooked_vit(
         pretrained=pretrained,
         num_classes=num_classes,
         img_size=img_size,
+        qk_norm=qk_norm,
     )
 
     # ------------------------------------------------------------------ #

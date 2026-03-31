@@ -234,6 +234,7 @@ if cfg.init_from == "scratch":
         img_size=cfg.img_size,
         init_std=cfg.init_std,
         use_scaled_init=cfg.use_scaled_init,
+        qk_norm=cfg.qk_norm,
         device=device,
     )
 
@@ -241,6 +242,14 @@ elif cfg.init_from == "resume":
     ckpt_path = os.path.join(cfg.out_dir, "ckpt.pt")
     print(f"[model] resuming from {ckpt_path} …")
     checkpoint = torch.load(ckpt_path, map_location=device)
+    # Older checkpoints (before qk_norm was saved) default to False.
+    ckpt_qk_norm = checkpoint.get("qk_norm", False)
+    if "qk_norm" not in checkpoint and cfg.qk_norm != ckpt_qk_norm:
+        print(
+            f"[warn] checkpoint has no 'qk_norm' field (assumed False); "
+            f"cfg.qk_norm={cfg.qk_norm} will be ignored — using False to "
+            "match the checkpoint architecture."
+        )
     model = build_hooked_vit(
         model_name=checkpoint["model_name"],
         num_classes=checkpoint["num_classes"],
@@ -248,6 +257,7 @@ elif cfg.init_from == "resume":
         img_size=cfg.img_size,
         init_std=cfg.init_std,
         use_scaled_init=False,
+        qk_norm=ckpt_qk_norm,
         device=device,
     )
     state_dict = _strip_compile_prefix(checkpoint["model"])
@@ -258,6 +268,14 @@ elif cfg.init_from == "resume":
 else:
     print(f"[model] fine-tuning from checkpoint {cfg.init_from} …")
     checkpoint = torch.load(cfg.init_from, map_location=device)
+    # Older checkpoints (before qk_norm was saved) default to False.
+    ckpt_qk_norm = checkpoint.get("qk_norm", False)
+    if "qk_norm" not in checkpoint and cfg.qk_norm != ckpt_qk_norm:
+        print(
+            f"[warn] checkpoint has no 'qk_norm' field (assumed False); "
+            f"cfg.qk_norm={cfg.qk_norm} will be ignored — using False to "
+            "match the checkpoint architecture."
+        )
     model = build_hooked_vit(
         model_name=checkpoint.get("model_name", cfg.model_name),
         num_classes=checkpoint.get("num_classes", cfg.num_classes),
@@ -265,6 +283,7 @@ else:
         img_size=cfg.img_size,
         init_std=cfg.init_std,
         use_scaled_init=False,
+        qk_norm=ckpt_qk_norm,
         device=device,
     )
     state_dict = _strip_compile_prefix(checkpoint["model"])
@@ -394,6 +413,7 @@ def _save_checkpoint(suffix: str = "ckpt") -> None:
             "best_val_loss": best_val_loss,
             "model_name": cfg.model_name,
             "num_classes": cfg.num_classes,
+            "qk_norm": cfg.qk_norm,
             "config": vars(cfg),
         }
         path = os.path.join(run_out_dir, f"{suffix}.pt")

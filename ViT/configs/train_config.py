@@ -118,6 +118,14 @@ class TrainConfig:
     NanoGPT's residual-depth scaling.
     """
 
+    qk_norm: bool = False
+    """
+    If False (default), query and key projections use no normalisation —
+    matching the NanoGPT / LLM experiment setup where no QK-norm is applied.
+    If True, per-head LayerNorm is installed on the query and key projections
+    via timm's native ``qk_norm`` option.
+    """
+
     # ------------------------------------------------------------------ #
     # Optimiser
     # ------------------------------------------------------------------ #
