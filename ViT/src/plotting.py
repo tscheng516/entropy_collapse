@@ -1,14 +1,15 @@
 """
-Plotting utilities for the NanoGPT entropy-collapse experiments.
+Plotting utilities for the ViT entropy-collapse experiments.
 
 This module is self-contained: all spike-detection and correlation helpers
 live here so no shared ``common/`` package is required.
 
 Two families of utilities are provided:
 
-1. ``plot_training_dynamics``   — 2×6-panel training-dynamics grid (loss,
-                                  Hessian proxies, per-layer entropy, and
-                                  three pairwise proxy scatter plots).
+1. ``plot_training_dynamics``   — 2×6-panel training-dynamics grid (loss +
+                                  accuracy, Hessian proxies, per-layer
+                                  entropy, and three pairwise proxy scatter
+                                  plots).
 2. ``plot_spike_cooccurrence``  — MAD-based joint/disjoint spike timeline
                                   for two concurrent metric series.
                                   Matches the ``conditional_exceedance_local``
@@ -209,17 +210,17 @@ def plot_training_dynamics(
     save_path: str | None = None,
 ) -> plt.Figure:
     """
-    Plot training dynamics for two training runs (e.g. AdamW vs SGD).
+    Plot training dynamics for one or two training runs (e.g. AdamW vs SGD).
 
     Args:
         histories:  Dict mapping optimizer name (e.g. ``"AdamW"``) to a
                     history dict with keys:
-                    ``loss``, ``hessian``, ``prec_h``, ``hessian_vv``,
+                    ``loss``, ``val_loss``, ``acc``, ``val_acc``,
+                    ``hessian``, ``prec_h``, ``hessian_vv``,
                     ``gn``, ``fd``, ``entropy``.
                     ``entropy`` values are lists of per-layer floats.
         lrs:        Dict mapping optimizer name to the peak LR used
-                    (kept for API compatibility; no longer used for
-                    ceiling-line annotation).
+                    (kept for API compatibility).
         save_path:  If provided, save the figure to this path.
 
     Returns:
@@ -227,7 +228,6 @@ def plot_training_dynamics(
     """
     opt_names = list(histories.keys())
     n_rows = len(opt_names)
-    # Expand layout to include three comparison scatter panels
     fig, axs = plt.subplots(n_rows, 6, figsize=(36, 5 * n_rows))
     if n_rows == 1:
         axs = axs[np.newaxis, :]  # ensure 2-D indexing works
@@ -236,7 +236,6 @@ def plot_training_dynamics(
         h = histories[name]
         color = "blue" if "adam" in name.lower() else "orange"
 
-        # Normalize supported key names and ensure numpy arrays for plotting
         def _as1d(key, alt=None):
             val = h.get(key, h.get(alt) if alt is not None else None)
             if val is None:
@@ -246,7 +245,6 @@ def plot_training_dynamics(
                 return arr.reshape(-1)
             return arr.ravel()
 
-        # Small helper to draw log-log scatter comparisons and show correlations
         def _comp_plot(ax_cmp, x_arr, y_arr, x_label, y_label):
             x = np.asarray(x_arr, dtype=float)
             y = np.asarray(y_arr, dtype=float)
@@ -272,12 +270,20 @@ def plot_training_dynamics(
             ax_cmp.set_xlabel(x_label)
             ax_cmp.set_ylabel(y_label)
 
-        # --- Col 0: loss ---
-        axs[row, 0].plot(_as1d("loss"), color=color, label=f"{name} Loss")
-        axs[row, 0].set_title(f"{name} Training Loss")
-        axs[row, 0].set_xlabel("Iteration")
-        axs[row, 0].set_ylabel("Cross-entropy loss")
-        axs[row, 0].legend()
+        # --- Col 0: loss (+ accuracy on twin axis) ---
+        ax_loss = axs[row, 0]
+        loss_arr = _as1d("loss")
+        ax_loss.plot(loss_arr, color=color, label=f"{name} Loss")
+        acc_arr = _as1d("acc")
+        if acc_arr.size:
+            ax_acc = ax_loss.twinx()
+            ax_acc.plot(acc_arr, color="green", linestyle="--", alpha=0.7, label="Train Acc")
+            ax_acc.set_ylabel("Accuracy (%)", color="green")
+            ax_acc.tick_params(axis="y", labelcolor="green")
+        ax_loss.set_title(f"{name} Training Loss")
+        ax_loss.set_xlabel("Iteration")
+        ax_loss.set_ylabel("Cross-entropy loss")
+        ax_loss.legend(loc="upper left")
 
         # --- Col 1: Hessian proxies ---
         ax = axs[row, 1]
@@ -301,7 +307,6 @@ def plot_training_dynamics(
                 linewidth=2,
                 label=r"Gauss-Newton ($H^{GN}$)",
             )
-
         vv_arr = _as1d("hessian_vv", alt="vv")
         if vv_arr.size:
             ax.plot(
@@ -319,7 +324,7 @@ def plot_training_dynamics(
 
         # --- Col 2: per-layer attention entropy ---
         entropies = np.array(h.get("entropy", []))  # (T, n_layer)
-        if entropies.ndim == 2:
+        if entropies.ndim == 2 and entropies.shape[1] > 0:
             n_layers = entropies.shape[1]
             colors_entropy = plt.cm.viridis(np.linspace(0, 1, n_layers))
             for layer_idx in range(n_layers):
@@ -333,7 +338,7 @@ def plot_training_dynamics(
         axs[row, 2].set_ylabel("Entropy (nats)")
         axs[row, 2].legend(fontsize="small", ncol=2)
 
-        # --- Col 3..5: three comparisons vs exact Hessian ---
+        # --- Cols 3–5: three comparisons vs exact Hessian ---
         h_arr = _as1d("hessian")
         prec_arr = _as1d("prec_h")
         gn_arr = _as1d("gn")
