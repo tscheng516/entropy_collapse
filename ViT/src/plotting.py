@@ -13,7 +13,7 @@ Two families of utilities are provided:
 2. ``plot_spike_cooccurrence``  — MAD-based joint/disjoint spike timeline
                                   for two concurrent metric series.
                                   Matches the ``conditional_exceedance_local``
-                                  format from ``Tin_Sum.ipynb``.
+                                  format from ``notebook.ipynb``.
 3. ``print_correlations``       — Spearman & Pearson correlations between
                                   curvature metric pairs.
 """
@@ -91,7 +91,7 @@ def plot_spike_cooccurrence(
       * Orange ``|`` — spikes in Y only
 
     This implementation matches the ``conditional_exceedance_local``
-    function in ``Tin_Sum.ipynb``.
+    function in ``notebook.ipynb``.
 
     Args:
         x, y:       1-D arrays of the same length.
@@ -190,7 +190,7 @@ def plot_spike_cooccurrence(
 
 
 # ======================================================================
-# Correlation analysis (matches Tin_Sum.ipynb Cell 3)
+# Correlation analysis (matches notebook.ipynb Cell 3)
 # ======================================================================
 
 

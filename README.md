@@ -21,7 +21,7 @@ entropy_collapse/
 │   │   ├── data_utils.py         # Data loading & batch sampling
 │   │   └── plotting.py           # Training-dynamics plot, MAD spike detection,
 │   │                             #   and Spearman/Pearson correlation helpers
-│   └── Tin_Sum.ipynb             # Original exploratory notebook
+│   └── notebook.ipynb            # Original exploratory notebook
 ├── ViT/                          # Vision Transformer experiments
 │   ├── base_train.py             # Main training + checkpointing entry-point
 │   ├── configs/
@@ -201,7 +201,7 @@ Spike-timeline strip that answers: *do spikes in metric X coincide with
 spikes in metric Y?*
 
 Spikes are detected via the **MAD (Median Absolute Deviation)** method —
-matching the `conditional_exceedance_local` function in `Tin_Sum.ipynb`:
+matching the `conditional_exceedance_local` function in `notebook.ipynb`:
 a point is a spike if its residual from the local rolling median exceeds
 `z_score × MAD`.  The plot shows:
 - Blue `|`  — X-only spikes
