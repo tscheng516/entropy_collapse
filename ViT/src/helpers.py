@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
-from torch.func import functional_call, jvp, vjp
+from torch.func import functional_call
+from torch.autograd import functional as autograd_functional
 
 
 # ======================================================================
@@ -193,43 +194,62 @@ def get_curvature_metrics(
 
     # ------------------------------------------------------------------ #
     # 4. Gauss-Newton  (H_GN = J^T H_L J)
+    #
+    # torch.func.jvp / vjp require pure, side-effect-free functions.
+    # _patched_attn_forward writes self.last_att = attn.detach() on every
+    # call, which corrupts the functorch tracing state and eventually
+    # causes CUDA context corruption.  torch.autograd.functional.jvp /
+    # vjp run through the standard autograd engine and tolerate such
+    # module-state side effects.
     # ------------------------------------------------------------------ #
-    params_dict = dict(model.named_parameters())
+    params_keys = [k for k, _ in model.named_parameters()]
+    params_vals = [p for _, p in model.named_parameters()]
 
-    def _fwd(p_dict: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Pure-function forward: returns logits (B, num_classes)."""
+    def _fwd_tuple(*p_vals: torch.Tensor) -> torch.Tensor:
+        """Forward pass with parameters supplied as a flat tuple."""
+        p_dict = {k: v for k, v in zip(params_keys, p_vals)}
         return functional_call(model, p_dict, (X,))
 
-    flat_params = torch.cat([p.reshape(-1) for p in model.parameters()])
+    flat_params = torch.cat([p.reshape(-1) for p in params_vals])
     v_g = torch.randn_like(flat_params)
     v_g = v_g / (v_g.norm() + 1e-9)
     flat_gn_v: torch.Tensor | None = None
     for _ in range(max_iter):
-        tangents: dict[str, torch.Tensor] = {}
+        # ---- JVP: Jv = J @ v ----
+        tangents_list: list[torch.Tensor] = []
         offset = 0
-        for k, p in params_dict.items():
+        for p in params_vals:
             numel = p.numel()
-            tangents[k] = v_g[offset : offset + numel].view_as(p)
+            tangents_list.append(v_g[offset : offset + numel].view_as(p))
             offset += numel
 
-        out_logits, Jv = jvp(_fwd, (params_dict,), (tangents,))
+        out_logits, Jv = autograd_functional.jvp(
+            _fwd_tuple, tuple(params_vals), tuple(tangents_list), create_graph=False
+        )
+
+        # Ensure out_logits is a leaf tensor so torch.autograd.grad can
+        # differentiate w.r.t. it.  detach() first in case jvp produced a
+        # non-leaf with requires_grad=False (double-backward internals).
         if not out_logits.requires_grad:
-            out_logits = out_logits.requires_grad_(True)
+            out_logits = out_logits.detach().requires_grad_(True)
 
         num_classes = out_logits.size(-1)
         l = F.cross_entropy(out_logits.reshape(-1, num_classes), Y.reshape(-1))
         grad_l = torch.autograd.grad(l, out_logits, create_graph=True)[0]
-        H_L_Jv = torch.autograd.grad(grad_l, out_logits, grad_outputs=Jv)[0]
+        H_L_Jv = torch.autograd.grad(grad_l, out_logits, grad_outputs=Jv.detach())[0]
 
-        _, vjp_fn = vjp(_fwd, params_dict)
-        gn_v_dict = vjp_fn(H_L_Jv.detach())[0]
+        # ---- VJP: J^T @ (H_L @ Jv) ----
+        _, gn_tuple = autograd_functional.vjp(
+            _fwd_tuple, tuple(params_vals), H_L_Jv.detach()
+        )
 
         flat_gn_v = torch.cat(
-            [gn_v_dict[k].contiguous().reshape(-1) for k in params_dict.keys()]
+            [g.contiguous().reshape(-1) for g in gn_tuple]
         )
         v_g = flat_gn_v / (flat_gn_v.norm() + 1e-9)
 
-        del out_logits, Jv, l, grad_l, H_L_Jv, gn_v_dict, tangents
+        del out_logits, Jv, l, grad_l, H_L_Jv, gn_tuple, tangents_list
+        torch.cuda.empty_cache()
 
     gn_norm = torch.dot(v_g, flat_gn_v).item() if flat_gn_v is not None else 0.0
     torch.cuda.empty_cache()
