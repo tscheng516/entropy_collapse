@@ -22,11 +22,12 @@ Default config (CIFAR-10, ViT-Small/16, AdamW)::
 
 Override individual flags::
 
-    python ViT/base_train.py learning_rate=5e-4 optimizer=sgd max_iters=2000
+    python ViT/base_train.py --lr 5e-4 --optim sgd --max_it 2000
 
 The override syntax is identical to NanoGPT's ``configurator.py`` convention:
 any ``key=value`` argument is ``ast.literal_eval``'d and injected into the
-config dataclass.  Pass ``wandb_log=True`` to enable W&B tracking.
+config dataclass.  For argparse-style flags, use short names such as
+``--cp``, ``--optim``, ``--lr``, ``--max_it``, ``--wandb``, and ``--z``.
 
 Setup
 -----
@@ -42,7 +43,7 @@ Setup
 
     torchrun --nproc_per_node=4 ViT/base_train.py \\
         dataset=imagenet data_dir=/data/imagenet num_classes=1000 \\
-        wandb_log=True learning_rate=1e-3 max_iters=5000
+        --wandb true --lr 1e-3 --max_it 5000
 
 Note: CIFAR-10 images are 32×32 but are up-sampled to 224×224 by the
 data pipeline so the same ViT-Small/16 architecture can be used for a
@@ -84,6 +85,7 @@ from configs.train_config import TrainConfig  # noqa: E402
 cfg = TrainConfig()
 
 # NanoGPT-style CLI overrides: python ViT/base_train.py learning_rate=1e-4 ...
+# Short argparse flags are also supported, e.g. ``--lr 1e-4 --optim adamw``.
 for arg in sys.argv[1:]:
     if "=" in arg:
         key, val = arg.split("=", 1)

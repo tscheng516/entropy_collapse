@@ -22,11 +22,12 @@ Default config (edit configs/train_config.py or pass overrides on CLI)::
 
 Override individual flags::
 
-    python LLM/base_train.py learning_rate=5e-4 optimizer=sgd max_iters=2000
+    python LLM/base_train.py --lr 5e-4 --optim sgd --max_it 2000
 
 The override syntax reuses the NanoGPT ``configurator.py`` convention:
 any ``key=value`` argument is eval'd and injected into the config
-dataclass.  Pass ``wandb_log=True`` to enable W&B tracking.
+dataclass.  For argparse-style flags, use short names such as
+``--cp``, ``--optim``, ``--lr``, ``--max_it``, ``--wandb``, and ``--z``.
 
 Setup
 -----
@@ -46,7 +47,7 @@ Setup
 
     or
 
-    torchrun --nproc_per_node=4 LLM/base_train.py init_from=scratch optimizer=adamw learning_rate=1e-3 max_iters=1000 wandb_log=True data_dir=LLM/nanoGPT/data/shakespeare_char
+    torchrun --nproc_per_node=4 LLM/base_train.py --cp scratch --optim adamw --lr 1e-3 --max_it 1000 --wandb true data_dir=LLM/nanoGPT/data/shakespeare_char
 
 Note: ``data_dir`` in TrainConfig defaults to ``"nanoGPT/data/shakespeare_char"``
 (relative to the working directory).  If you run from the repo root, set::
@@ -95,6 +96,7 @@ from configs.train_config import TrainConfig  # noqa: E402
 cfg = TrainConfig()
 
 # NanoGPT-style CLI overrides: python LLM/base_train.py learning_rate=1e-4 ...
+# Short argparse flags are also supported, e.g. ``--lr 1e-4 --optim adamw``.
 import ast
 
 for arg in sys.argv[1:]:
