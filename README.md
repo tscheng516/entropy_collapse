@@ -43,48 +43,149 @@ easy to adapt.
 
 ---
 
-## Quick Start (LLM / NanoGPT)
+## Clean Workspace Setup (Recommended)
 
-### 1. Clone NanoGPT inside `LLM/` and prepare Shakespeare data
+The steps below are intended for a fresh machine / fresh clone and are
+tested for both LLM (NanoGPT-based) and ViT experiments.
 
-All subsequent commands assume you are in the **repo root**.
+### 1. Create and activate a Python virtual environment
+
+Use Python 3.10 or 3.11.
 
 ```bash
-# From the repo root:
-git clone https://github.com/karpathy/nanoGPT.git LLM/nanoGPT
-cd LLM/nanoGPT && python data/shakespeare_char/prepare.py && cd ../..
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
 ```
 
-### 2. Install dependencies
+### 1b. Alternative: create a Conda environment
+
+If you prefer Conda, use this instead of `venv`.
+
+CPU / MPS (macOS) example:
 
 ```bash
+conda create -n entropy-collapse python=3.11 -y
+conda activate entropy-collapse
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+```
+
+CUDA 11.8 (Linux) example:
+
+```bash
+conda create -n entropy-collapse python=3.11 -y
+conda activate entropy-collapse
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install --index-url https://download.pytorch.org/whl/cu118 \
+    torch==2.1.2 torchvision==0.16.2
+python -m pip install -r requirements.txt
+```
+
+Note: for CUDA environments, install `torch`/`torchvision` with the CUDA
+index first (as above), then install the rest from `requirements.txt`.
+
+### 2. Install a stable, pinned package stack
+
+For best reproducibility, install pinned versions first, then install the
+project requirements.
+
+CPU / MPS (macOS) example:
+
+```bash
+pip install \
+    torch==2.1.2 torchvision==0.16.2 \
+    numpy==1.26.4 scipy==1.11.4 matplotlib==3.8.2 \
+    timm==0.9.12 wandb==0.16.6
 pip install -r requirements.txt
 ```
 
-### 3. Train with default config
+CUDA 11.8 example:
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/cu118 \
+    torch==2.1.2 torchvision==0.16.2
+pip install \
+    numpy==1.26.4 scipy==1.11.4 matplotlib==3.8.2 \
+    timm==0.9.12 wandb==0.16.6
+pip install -r requirements.txt
+```
+
+### 3. Clone NanoGPT inside `LLM/` and prepare Shakespeare data
+
+All commands below assume you are in the repo root.
+
+```bash
+git clone https://github.com/karpathy/nanoGPT.git LLM/nanoGPT
+cd LLM/nanoGPT
+# Optional: pin to the exact commit you used in prior runs for strict reproducibility
+# git checkout <your-known-good-commit>
+python data/shakespeare_char/prepare.py
+cd ../..
+```
+
+### 4. Smoke-test both experiment entry points
+
+```bash
+python LLM/base_train.py --max_it 2 --hessian_freq 1 --entropy_freq 1 data_dir=LLM/nanoGPT/data/shakespeare_char
+python ViT/base_train.py --max_it 2 --hessian_freq 1 --entropy_freq 1
+```
+
+## Quick Start (LLM / NanoGPT)
+
+### 1. Train with default config
 
 ```bash
 python LLM/base_train.py data_dir=LLM/nanoGPT/data/shakespeare_char
 ```
 
-### 4. Override flags from the command line
+### 2. Override flags from the command line
+
+Short argparse aliases:
+- `--cp` maps to `init_from`
+- `--optim` maps to `optimizer`
+- `--lr` maps to `learning_rate`
+- `--max_it` maps to `max_iters`
+- `--wandb` maps to `wandb_log`
+- `--z` maps to `z_score`
 
 ```bash
 python LLM/base_train.py \
-    data_dir=LLM/nanoGPT/data/shakespeare_char \
-    learning_rate=5e-4 \
-    optimizer=adamw \
-    max_iters=2000 \
-    hessian_freq=5 \
-    entropy_freq=10 \
-    wandb_log=True \
-    wandb_run_name=small-lr-run
+        data_dir=LLM/nanoGPT/data/shakespeare_char \
+        --lr 5e-4 \
+        --optim adamw \
+        --max_it 2000 \
+        hessian_freq=5 \
+        entropy_freq=10 \
+        --wandb true \
+        wandb_run_name=small-lr-run
 ```
 
-### 5. Resume from a checkpoint
+### 3. Resume from a checkpoint
 
 ```bash
-python LLM/base_train.py init_from=resume out_dir=out
+python LLM/base_train.py --cp resume out_dir=out
+```
+
+## Quick Start (ViT)
+
+### 1. Train with default config (CIFAR-10)
+
+```bash
+python ViT/base_train.py
+```
+
+### 2. Override core flags
+
+```bash
+python ViT/base_train.py \
+    --optim adamw \
+    --lr 1e-3 \
+    --max_it 5000 \
+    hessian_freq=5 \
+    entropy_freq=10 \
+    --wandb true \
+    wandb_run_name=vit-cifar10-run
 ```
 
 ---
@@ -117,6 +218,11 @@ pairs (H vs H̃, H vs H_GN, H vs H_VV).
 #### `plot_training_dynamics(histories, lrs, save_path)`
 2×6-panel grid: training loss, Hessian proxies (H, H̃, H_GN, H_VV),
 per-layer attention entropy, and three pairwise proxy scatter plots.
+
+To match notebook behavior, sparse metric logging is smoothed with
+carry-forward preprocessing before plotting:
+- Curvature proxies carry forward the last positive finite value.
+- Per-layer entropy applies the same carry-forward rule per layer.
 
 ---
 
@@ -213,7 +319,7 @@ End-to-end training script that:
 
 ## Weights & Biases Integration
 
-Set `wandb_log=True` to enable.  Logged metrics:
+Enable W&B with either `--wandb true` or `wandb_log=True`. Logged metrics:
 
 | W&B key | Logged when |
 |---|---|
@@ -236,15 +342,15 @@ Set `wandb_log=True` to enable.  Logged metrics:
 ```bash
 python LLM/base_train.py \
     data_dir=LLM/nanoGPT/data/shakespeare_char \
-    optimizer=adamw learning_rate=1e-5 max_iters=800 \
+    --optim adamw --lr 1e-5 --max_it 800 \
     hessian_freq=3 entropy_freq=10 \
-    wandb_log=True wandb_run_name=exp-A-adamw
+    --wandb true wandb_run_name=exp-A-adamw
 
 python LLM/base_train.py \
     data_dir=LLM/nanoGPT/data/shakespeare_char \
-    optimizer=sgd learning_rate=0.002 max_iters=800 \
+    --optim sgd --lr 0.002 --max_it 800 \
     hessian_freq=3 entropy_freq=10 \
-    wandb_log=True wandb_run_name=exp-A-sgd
+    --wandb true wandb_run_name=exp-A-sgd
 ```
 
 ### Experiment B — Large-LR instability (spike co-occurrence)
@@ -252,20 +358,19 @@ python LLM/base_train.py \
 ```bash
 python LLM/base_train.py \
     data_dir=LLM/nanoGPT/data/shakespeare_char \
-    optimizer=adamw learning_rate=5e-3 max_iters=100 \
+    --optim adamw --lr 5e-3 --max_it 100 \
     hessian_freq=1 entropy_freq=1 \
-    wandb_log=True wandb_run_name=exp-B-adamw
+    --wandb true wandb_run_name=exp-B-adamw
 
 python LLM/base_train.py \
     data_dir=LLM/nanoGPT/data/shakespeare_char \
-    optimizer=sgd learning_rate=0.5 max_iters=100 \
+    --optim sgd --lr 0.5 --max_it 100 \
     hessian_freq=1 entropy_freq=1 \
-    wandb_log=True wandb_run_name=exp-B-sgd
+    --wandb true wandb_run_name=exp-B-sgd
 ```
 
-After training, load `out/history.pkl` and call
-`src.plotting.plot_spike_cooccurrence` to reproduce the joint/disjoint
-spike figures.
+After training, each `base_train.py` saves six spike co-occurrence plots
+for `H` vs `{H_VV, Prec_H, GN}` at `z=3` and `z=10`.
 
 ---
 
