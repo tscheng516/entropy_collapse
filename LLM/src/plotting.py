@@ -53,6 +53,17 @@ def _carry_forward_positive(series: np.ndarray | list) -> np.ndarray:
     return arr
 
 
+def _carry_forward_positive_2d(matrix: np.ndarray | list) -> np.ndarray:
+    """Apply positive carry-forward independently to each column."""
+    arr = np.asarray(matrix, dtype=float)
+    if arr.ndim != 2 or arr.size == 0:
+        return arr
+    out = arr.copy()
+    for j in range(out.shape[1]):
+        out[:, j] = _carry_forward_positive(out[:, j])
+    return out
+
+
 # ======================================================================
 # MAD-based spike co-occurrence (matches Tin_Sum.ipynb Cell 5)
 # ======================================================================
@@ -178,7 +189,7 @@ def plot_spike_cooccurrence(
 
 
 # ======================================================================
-# Correlation analysis (matches Tin_Sum.ipynb Cell 3)
+# Correlation analysis 
 # ======================================================================
 
 
@@ -343,7 +354,7 @@ def plot_training_dynamics(
         ax.legend(fontsize="small")
 
         # --- Col 2: per-layer attention entropy ---
-        entropies = np.array(h.get("entropy", []))  # (T, n_layer)
+        entropies = _carry_forward_positive_2d(np.array(h.get("entropy", [])))  # (T, n_layer)
         if entropies.ndim == 2:
             n_layers = entropies.shape[1]
             colors_entropy = plt.cm.viridis(np.linspace(0, 1, n_layers))

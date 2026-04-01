@@ -18,11 +18,11 @@ Usage
 -----
 Default config (CIFAR-10, ViT-Small/16, AdamW)::
 
-    python ViT/base_train.py
+    python base_train.py
 
 Override individual flags::
 
-    python ViT/base_train.py --lr 5e-4 --optim sgd --max_it 2000
+    python base_train.py --lr 5e-4 --optim sgd --max_it 2000
 
 The override syntax is identical to NanoGPT's ``configurator.py`` convention:
 any ``key=value`` argument is ``ast.literal_eval``'d and injected into the
@@ -37,11 +37,11 @@ Setup
 
 2. Run from the repo root::
 
-    python ViT/base_train.py
+    python base_train.py
 
    or with torchrun::
 
-    torchrun --nproc_per_node=4 ViT/base_train.py \\
+    torchrun --nproc_per_node=4 base_train.py \\
         dataset=imagenet data_dir=/data/imagenet num_classes=1000 \\
         --wandb true --lr 1e-3 --max_it 5000
 
@@ -84,7 +84,7 @@ from configs.train_config import TrainConfig  # noqa: E402
 
 cfg = TrainConfig()
 
-# NanoGPT-style CLI overrides: python ViT/base_train.py learning_rate=1e-4 ...
+# NanoGPT-style CLI overrides: python base_train.py learning_rate=1e-4 ...
 # Short argparse flags are also supported, e.g. ``--lr 1e-4 --optim adamw``.
 for arg in sys.argv[1:]:
     if "=" in arg:
