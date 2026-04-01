@@ -383,7 +383,7 @@ vv_mask = get_VV_subspace_mask(model).to(device)
 
 
 @torch.no_grad()
-def estimate_val_loss(n_batches: int = 10) -> float:
+def estimate_val_loss(n_batches: int = 5) -> float:
     model.eval()
     losses = []
     for _ in range(n_batches):
