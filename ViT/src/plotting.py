@@ -94,14 +94,13 @@ def plot_spike_cooccurrence(
     function in ``notebook.ipynb``.
 
         Implementation details:
-            * Inputs are first smoothed with carry-forward to handle sparse logging
-                (e.g., metrics only computed every N steps).
-            * If ``log_scale=True`` but too few positive samples exist, detection
-                automatically falls back to linear scale instead of returning an
-                empty plot.
-            * If no valid finite samples exist at all, the function returns an
-                annotated "No valid data points" figure and a results dict with
-                zero counts.
+                * Uses raw logged values for spike detection (no carry-forward) to
+                    avoid staircase artifacts.
+                * Drops placeholder points where both series are zero/non-finite.
+                * If ``log_scale=True`` but too few positive samples exist, detection
+                    automatically falls back to linear scale.
+                * If no valid finite samples exist, the function returns an annotated
+                    "No valid data points" figure and a results dict with zero counts.
 
     Args:
         x, y:       1-D arrays of the same length.
@@ -118,11 +117,13 @@ def plot_spike_cooccurrence(
                  ``baseline_P(Y_spike)``, ``n_X_spikes``, ``n_Y_spikes``,
                  ``n_joint_spikes``, ``n_points``.
     """
-    x = _carry_forward_positive(x)
-    y = _carry_forward_positive(y)
+    x = np.asarray(x, dtype=float).ravel()
+    y = np.asarray(y, dtype=float).ravel()
 
     orig_indices = np.arange(len(x))
     finite = np.isfinite(x) & np.isfinite(y)
+    placeholder = (x == 0.0) & (y == 0.0)
+    finite = finite & ~placeholder
 
     # Prefer log-scale spike detection, but fall back to linear scale when
     # too few positive samples are available (prevents empty plots).
