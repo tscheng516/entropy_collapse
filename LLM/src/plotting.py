@@ -92,6 +92,16 @@ def plot_spike_cooccurrence(
     This implementation matches the ``conditional_exceedance_local``
     function in ``notebook.ipynb``.
 
+        Implementation details:
+            * Inputs are first smoothed with carry-forward to handle sparse logging
+                (e.g., metrics only computed every N steps).
+            * If ``log_scale=True`` but too few positive samples exist, detection
+                automatically falls back to linear scale instead of returning an
+                empty plot.
+            * If no valid finite samples exist at all, the function returns an
+                annotated "No valid data points" figure and a results dict with
+                zero counts.
+
     Args:
         x, y:       1-D arrays of the same length.
         x_name:     Label for the X series.
@@ -111,13 +121,45 @@ def plot_spike_cooccurrence(
     y = _carry_forward_positive(y)
 
     orig_indices = np.arange(len(x))
-    valid = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
+    finite = np.isfinite(x) & np.isfinite(y)
+
+    # Prefer log-scale spike detection, but fall back to linear scale when
+    # too few positive samples are available (prevents empty plots).
+    use_log_scale = bool(log_scale)
+    if use_log_scale:
+        valid = finite & (x > 0) & (y > 0)
+        if valid.sum() < 3:
+            use_log_scale = False
+            valid = finite
+    else:
+        valid = finite
+
+    if valid.sum() == 0:
+        results = {
+            "P(Y_spike | X_spike)": float("nan"),
+            "baseline_P(Y_spike)": float("nan"),
+            "n_X_spikes": 0,
+            "n_Y_spikes": 0,
+            "n_joint_spikes": 0,
+            "n_points": 0,
+        }
+        fig = plt.figure(figsize=(12, 2.5))
+        plt.text(0.5, 0.5, "No valid data points", ha="center", va="center", transform=plt.gca().transAxes)
+        plt.yticks([1, 1.5, 2], [f"{y_name} Only", "Joint", f"{x_name} Only"])
+        plt.xlabel("Iteration")
+        plt.title(f"Local Spike Co-occurrence: {x_name} vs {y_name} (Z > {z_score})")
+        plt.grid(axis="x", linestyle="--", alpha=0.5)
+        plt.xlim(0, len(x))
+        plt.tight_layout()
+        if save_path:
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        return fig, results
 
     x_c = x[valid]
     y_c = y[valid]
     idx = orig_indices[valid]
 
-    if log_scale:
+    if use_log_scale:
         x_c = np.log(x_c)
         y_c = np.log(y_c)
 

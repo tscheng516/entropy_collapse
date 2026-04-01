@@ -70,6 +70,27 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
+
+def _sdp_math_only_context(device_name: str):
+    """Use the non-deprecated SDPA context when available."""
+    if device_name == "cpu":
+        return nullcontext()
+
+    attn_mod = getattr(torch.nn, "attention", None)
+    if (
+        attn_mod is not None
+        and hasattr(attn_mod, "sdpa_kernel")
+        and hasattr(attn_mod, "SDPBackend")
+    ):
+        return attn_mod.sdpa_kernel(backends=[attn_mod.SDPBackend.MATH])
+
+    # Backward compatibility for older torch versions.
+    return torch.backends.cuda.sdp_kernel(
+        enable_flash=False,
+        enable_mem_efficient=False,
+        enable_math=True,
+    )
+
 # ---------------------------------------------------------------------------
 # 0.  Path setup
 #     a) Add repo root to sys.path so that the ``common`` package is importable.
@@ -484,9 +505,7 @@ for iter_num in range(iter_num, cfg.max_iters):
     if iter_num % cfg.hessian_freq == 0:
         model.train()
         optimizer.zero_grad()
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
-        ) if device != "cpu" else nullcontext():
+        with _sdp_math_only_context(device):
             _, loss_for_hess = model(X, Y)
 
         try:
