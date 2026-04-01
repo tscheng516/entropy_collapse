@@ -127,6 +127,26 @@ if known_args.wandb is not None:
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
 _maybe_set("z_score", known_args.z)
 
+
+def _expected_num_classes(dataset_name: str) -> int | None:
+    ds = dataset_name.lower()
+    if ds == "cifar10":
+        return 10
+    if ds == "cifar100":
+        return 100
+    if ds in ("imagenet", "imagenet_hf", "imagenet1k_hf", "hf_imagenet"):
+        return 1000
+    return None
+
+
+expected_classes = _expected_num_classes(cfg.dataset)
+if cfg.init_from == "scratch" and expected_classes is not None and cfg.num_classes != expected_classes:
+    print(
+        f"[warn] dataset='{cfg.dataset}' typically uses num_classes={expected_classes}, "
+        f"but got {cfg.num_classes}; overriding to {expected_classes} for compatibility."
+    )
+    cfg.num_classes = expected_classes
+
 # ---------------------------------------------------------------------------
 # 2.  Reproducibility & device
 # ---------------------------------------------------------------------------
@@ -243,6 +263,12 @@ elif cfg.init_from == "resume":
     ckpt_path = os.path.join(cfg.out_dir, "ckpt.pt")
     print(f"[model] resuming from {ckpt_path} …")
     checkpoint = torch.load(ckpt_path, map_location=device)
+    if expected_classes is not None and checkpoint["num_classes"] != expected_classes:
+        raise ValueError(
+            f"dataset='{cfg.dataset}' expects num_classes={expected_classes}, "
+            f"but checkpoint has num_classes={checkpoint['num_classes']}. "
+            "Use a matching dataset/checkpoint pair or train from scratch."
+        )
     # Older checkpoints (before qk_norm was saved) default to False.
     ckpt_qk_norm = checkpoint.get("qk_norm", False)
     if "qk_norm" not in checkpoint and cfg.qk_norm != ckpt_qk_norm:
@@ -269,6 +295,13 @@ elif cfg.init_from == "resume":
 else:
     print(f"[model] fine-tuning from checkpoint {cfg.init_from} …")
     checkpoint = torch.load(cfg.init_from, map_location=device)
+    ckpt_num_classes = checkpoint.get("num_classes", cfg.num_classes)
+    if expected_classes is not None and ckpt_num_classes != expected_classes:
+        raise ValueError(
+            f"dataset='{cfg.dataset}' expects num_classes={expected_classes}, "
+            f"but checkpoint has num_classes={ckpt_num_classes}. "
+            "Use a matching dataset/checkpoint pair or start from scratch."
+        )
     # Older checkpoints (before qk_norm was saved) default to False.
     ckpt_qk_norm = checkpoint.get("qk_norm", False)
     if "qk_norm" not in checkpoint and cfg.qk_norm != ckpt_qk_norm:

@@ -58,6 +58,7 @@ class TrainConfig:
       'cifar10'   — CIFAR-10 (auto-downloaded, 10 classes, 32×32 → resized).
       'cifar100'  — CIFAR-100 (auto-downloaded, 100 classes).
       'imagenet'  — ImageNet-1k (requires data_dir with train/ and val/ folders).
+      'imagenet_hf' — ImageNet-1k loaded directly from Hugging Face datasets.
     """
 
     data_dir: str = "./data"
@@ -66,6 +67,7 @@ class TrainConfig:
     For CIFAR-10/100: the torchvision download root.
     For ImageNet: should contain ``train/`` and ``val/`` sub-folders
     in ImageFolder format.
+    For ImageNet HF: used as the Hugging Face cache directory.
     """
 
     batch_size: int = 64

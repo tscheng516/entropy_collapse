@@ -175,7 +175,42 @@ python LLM/base_train.py --cp resume out_dir=out
 python ViT/base_train.py
 ```
 
-### 2. Override core flags
+### 2. Train on CIFAR-100
+
+No manual download is needed; `torchvision` auto-downloads CIFAR-100.
+
+```bash
+python ViT/base_train.py \
+    dataset=cifar100 \
+    data_dir=ViT/data/cifar100 \
+    num_classes=100 \
+    --optim adamw \
+    --lr 1e-3 \
+    --max_it 5000
+```
+
+### 3. Train on ImageNet-1k directly from Hugging Face
+
+No manual export script is required. The loader can pull
+`imagenet-1k` directly via the `datasets` package.
+
+```bash
+python ViT/base_train.py \
+    dataset=imagenet_hf \
+    data_dir=ViT/data/imagenet1k_hf \
+    num_classes=1000 \
+    --optim adamw \
+    --lr 1e-3 \
+    --max_it 5000
+```
+
+If you already have local ImageNet in ImageFolder layout, use:
+
+```bash
+python ViT/base_train.py dataset=imagenet data_dir=/path/to/imagenet num_classes=1000
+```
+
+### 4. Override core flags
 
 ```bash
 python ViT/base_train.py \

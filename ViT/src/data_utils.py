@@ -6,6 +6,7 @@ Supports three dataset backends:
   * CIFAR-100  — auto-downloaded via torchvision.
   * ImageNet   — loaded from an ImageFolder directory tree (requires the
                  dataset to be present on disk in train/ and val/ sub-dirs).
+    * ImageNet HF — loaded directly from Hugging Face ``imagenet-1k``.
 
 All datasets are returned as ``(train_loader, val_loader)`` pairs.  Images
 are resized to ``img_size × img_size`` and normalised with ImageNet statistics
@@ -17,7 +18,7 @@ from __future__ import annotations
 import os
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import torchvision
 import torchvision.transforms as T
 
@@ -25,6 +26,26 @@ import torchvision.transforms as T
 # ImageNet channel statistics (mean / std per channel).
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+class _HFDatasetWrapper(Dataset):
+    """Minimal wrapper to apply torchvision transforms on HF datasets."""
+
+    def __init__(self, hf_ds, transform):
+        self.hf_ds = hf_ds
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.hf_ds)
+
+    def __getitem__(self, idx: int):
+        ex = self.hf_ds[idx]
+        img = ex["image"]
+        if hasattr(img, "convert"):
+            img = img.convert("RGB")
+        x = self.transform(img)
+        y = int(ex["label"])
+        return x, y
 
 
 def _train_transform(img_size: int) -> T.Compose:
@@ -64,7 +85,8 @@ def load_data(
     Build train and validation ``DataLoader`` objects for the chosen dataset.
 
     Args:
-        dataset:     One of ``'cifar10'``, ``'cifar100'``, ``'imagenet'``.
+        dataset:     One of ``'cifar10'``, ``'cifar100'``, ``'imagenet'``,
+                 ``'imagenet_hf'``.
         data_dir:    Root directory for data storage / ImageFolder tree.
         img_size:    Spatial size fed to the model (images are resized).
         batch_size:  Images per batch.
@@ -78,7 +100,7 @@ def load_data(
     Raises:
         ValueError: When ``dataset`` is not a recognised string.
         FileNotFoundError: When ImageNet ``data_dir`` is missing the expected
-                           ``train/`` or ``val/`` sub-directories.
+                   ``train/`` or ``val/`` sub-directories.
     """
     os.makedirs(data_dir, exist_ok=True)
     train_tf = _train_transform(img_size)
@@ -118,10 +140,24 @@ def load_data(
         train_ds = torchvision.datasets.ImageFolder(train_path, transform=train_tf)
         val_ds = torchvision.datasets.ImageFolder(val_path, transform=val_tf)
 
+    elif dataset_key in ("imagenet_hf", "imagenet1k_hf", "hf_imagenet"):
+        try:
+            from datasets import load_dataset
+        except ImportError as exc:
+            raise ImportError(
+                "Hugging Face dataset backend requires 'datasets'. "
+                "Install with: pip install datasets"
+            ) from exc
+
+        train_hf = load_dataset("imagenet-1k", split="train", cache_dir=data_dir)
+        val_hf = load_dataset("imagenet-1k", split="validation", cache_dir=data_dir)
+        train_ds = _HFDatasetWrapper(train_hf, transform=train_tf)
+        val_ds = _HFDatasetWrapper(val_hf, transform=val_tf)
+
     else:
         raise ValueError(
             f"Unknown dataset '{dataset}'. "
-            "Supported values: 'cifar10', 'cifar100', 'imagenet'."
+            "Supported values: 'cifar10', 'cifar100', 'imagenet', 'imagenet_hf'."
         )
 
     train_loader = DataLoader(
