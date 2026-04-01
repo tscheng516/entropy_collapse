@@ -611,7 +611,7 @@ if not use_ddp or rank == 0:
         ("prec_h", "Prec_H", "hessian_prec"),
         ("gn", "GN", "hessian_gn"),
     ]
-    for z in (3, 10):
+    for z in (1.5, 2):
         for key, label, suffix in spike_targets:
             _, res = plot_spike_cooccurrence(
                 history["hessian"],
