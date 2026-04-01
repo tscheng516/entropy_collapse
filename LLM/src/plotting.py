@@ -29,6 +29,30 @@ from scipy import stats as sp_stats
 _MAD_TO_STD = 1.4826
 
 
+def _carry_forward_positive(series: np.ndarray | list) -> np.ndarray:
+    """
+    Fill non-positive / non-finite samples with the most recent positive value.
+
+    Training scripts often log curvature metrics every N steps and append
+    placeholders otherwise. The notebook visual style keeps the last measured
+    value between refreshes; this helper reproduces that behavior.
+    """
+    arr = np.asarray(series, dtype=float).copy().ravel()
+    if arr.size == 0:
+        return arr
+
+    valid = np.isfinite(arr) & (arr > 0)
+    if not valid.any():
+        return arr
+
+    first_valid = int(np.argmax(valid))
+    arr[:first_valid] = arr[first_valid]
+    for i in range(first_valid + 1, arr.size):
+        if not (np.isfinite(arr[i]) and arr[i] > 0):
+            arr[i] = arr[i - 1]
+    return arr
+
+
 # ======================================================================
 # MAD-based spike co-occurrence (matches Tin_Sum.ipynb Cell 5)
 # ======================================================================
@@ -72,8 +96,8 @@ def plot_spike_cooccurrence(
                  ``baseline_P(Y_spike)``, ``n_X_spikes``, ``n_Y_spikes``,
                  ``n_joint_spikes``, ``n_points``.
     """
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
+    x = _carry_forward_positive(x)
+    y = _carry_forward_positive(y)
 
     orig_indices = np.arange(len(x))
     valid = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
@@ -281,9 +305,10 @@ def plot_training_dynamics(
 
         # --- Col 1: Hessian proxies ---
         ax = axs[row, 1]
-        ax.plot(_as1d("hessian"), color="red", linewidth=2, label="Exact Hessian (H)")
+        h_arr = _carry_forward_positive(_as1d("hessian"))
+        ax.plot(h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
         if "adam" in name.lower():
-            prec_arr = _as1d("prec_h")
+            prec_arr = _carry_forward_positive(_as1d("prec_h"))
             if prec_arr.size:
                 ax.plot(
                     prec_arr,
@@ -292,7 +317,7 @@ def plot_training_dynamics(
                     linewidth=2,
                     label=r"Precond. Hessian ($\tilde{H}$)",
                 )
-        gn_arr = _as1d("gn")
+        gn_arr = _carry_forward_positive(_as1d("gn"))
         if gn_arr.size:
             ax.plot(
                 gn_arr,
@@ -302,7 +327,7 @@ def plot_training_dynamics(
                 label=r"Gauss-Newton ($H^{GN}$)",
             )
 
-        vv_arr = _as1d("hessian_vv", alt="vv")
+        vv_arr = _carry_forward_positive(_as1d("hessian_vv", alt="vv"))
         if vv_arr.size:
             ax.plot(
                 vv_arr,
@@ -334,10 +359,10 @@ def plot_training_dynamics(
         axs[row, 2].legend(fontsize="small", ncol=2)
 
         # --- Col 3..5: three comparisons vs exact Hessian ---
-        h_arr = _as1d("hessian")
-        prec_arr = _as1d("prec_h")
-        gn_arr = _as1d("gn")
-        vv_arr = _as1d("hessian_vv", alt="vv")
+        h_arr = _carry_forward_positive(_as1d("hessian"))
+        prec_arr = _carry_forward_positive(_as1d("prec_h"))
+        gn_arr = _carry_forward_positive(_as1d("gn"))
+        vv_arr = _carry_forward_positive(_as1d("hessian_vv", alt="vv"))
 
         _comp_plot(axs[row, 3], h_arr, prec_arr, "H (exact)", "Precond H")
         _comp_plot(axs[row, 4], h_arr, gn_arr, "H (exact)", "Gauss-Newton")

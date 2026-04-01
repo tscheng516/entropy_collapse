@@ -98,12 +98,12 @@ for arg in sys.argv[1:]:
 import argparse
 
 parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument("--init_from", type=str)
-parser.add_argument("--optimizer", type=str)
-parser.add_argument("--learning_rate", type=float)
-parser.add_argument("--max_iters", type=int)
-parser.add_argument("--wandb_log", type=str)
-parser.add_argument("--z_score", type=float)
+parser.add_argument("--cp", type=str)
+parser.add_argument("--optim", type=str)
+parser.add_argument("--lr", type=float)
+parser.add_argument("--max_it", type=int)
+parser.add_argument("--wandb", type=str)
+parser.add_argument("--z", type=float)
 known_args, _ = parser.parse_known_args()
 
 
@@ -116,14 +116,14 @@ def _maybe_set(attr, val, conv=lambda x: x):
         print(f"[warn] failed to set cfg.{attr} from CLI value {val}")
 
 
-_maybe_set("init_from", known_args.init_from)
-_maybe_set("optimizer", known_args.optimizer)
-_maybe_set("learning_rate", known_args.learning_rate)
-_maybe_set("max_iters", known_args.max_iters)
-if known_args.wandb_log is not None:
-    sval = str(known_args.wandb_log).lower()
+_maybe_set("init_from", known_args.cp)
+_maybe_set("optimizer", known_args.optim)
+_maybe_set("learning_rate", known_args.lr)
+_maybe_set("max_iters", known_args.max_it)
+if known_args.wandb is not None:
+    sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
-_maybe_set("z_score", known_args.z_score)
+_maybe_set("z_score", known_args.z)
 
 # ---------------------------------------------------------------------------
 # 2.  Reproducibility & device
@@ -608,16 +608,26 @@ if not use_ddp or rank == 0:
     )
     print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
 
-    fig2, res = plot_spike_cooccurrence(
-        history["hessian"],
-        history["hessian_vv"],
-        x_name="Exact H",
-        y_name="H_VV",
-        window=15,
-        z_score=cfg.z_score,
-        save_path=os.path.join(run_out_dir, "spike_cooccurrence_H_vs_HVV.png"),
-    )
-    print(
-        f"[plot] spike co-occurrence: "
-        f"P(H_VV spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}"
-    )
+    spike_targets = [
+        ("hessian_vv", "H_VV", "hessian_vv"),
+        ("prec_h", "Prec_H", "hessian_prec"),
+        ("gn", "GN", "hessian_gn"),
+    ]
+    for z in (3, 10):
+        for key, label, suffix in spike_targets:
+            _, res = plot_spike_cooccurrence(
+                history["hessian"],
+                history[key],
+                x_name="Exact H",
+                y_name=label,
+                window=15,
+                z_score=z,
+                save_path=os.path.join(
+                    run_out_dir,
+                    f"spike_cooccurrence_H_vs_{suffix}_z{z}.png",
+                ),
+            )
+            print(
+                f"[plot] z={z} spike co-occurrence: "
+                f"P({label} spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}"
+            )
