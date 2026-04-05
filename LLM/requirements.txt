@@ -1,0 +1,21 @@
+# LLM / NanoGPT experiments
+# Tested with Python 3.10 and 3.11
+#
+# Quick install (CPU / MPS):
+#   pip install -r LLM/requirements.txt
+#
+# CUDA 11.8:
+#   pip install --index-url https://download.pytorch.org/whl/cu118 torch==2.6.0
+#   pip install -r LLM/requirements.txt
+#
+# CUDA 12.1:
+#   pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.6.0
+#   pip install -r LLM/requirements.txt
+
+torch==2.6.0
+numpy==1.26.4
+scipy==1.11.4
+matplotlib==3.8.2
+wandb==0.19.11
+jupyterlab==4.2.5
+ipykernel==6.29.5
