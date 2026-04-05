@@ -7,14 +7,14 @@
 #
 # See LLM/README.md and ViT/README.md for full setup instructions.
 
-torch==2.1.2
-torchvision==0.16.2
+torch==2.6.0
+torchvision==0.21.0
 # timm is intentionally omitted here — ViT/requirements.txt pins it to the
 # exact git commit used by apple/ml-sigma-reparam for reproducibility.
 numpy==1.26.4
 scipy==1.11.4
 matplotlib==3.8.2
-wandb==0.16.6
+wandb==0.19.11
 datasets==2.19.2
 jupyterlab==4.2.5
 ipykernel==6.29.5

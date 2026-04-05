@@ -32,7 +32,7 @@ pip install -r LLM/requirements.txt
 For **CUDA 11.8**, install the GPU-enabled wheel first, then the rest:
 
 ```bash
-pip install --index-url https://download.pytorch.org/whl/cu118 torch==2.1.2
+pip install --index-url https://download.pytorch.org/whl/cu118 torch==2.6.0
 pip install -r LLM/requirements.txt
 ```
 

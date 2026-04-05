@@ -38,7 +38,7 @@ For **CUDA 11.8**, install the GPU-enabled wheels first, then the rest:
 
 ```bash
 pip install --index-url https://download.pytorch.org/whl/cu118 \
-    torch==2.1.2 torchvision==0.16.2
+    torch==2.6.0 torchvision==0.21.0
 pip install -r ViT/requirements.txt
 ```
 

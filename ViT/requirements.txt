@@ -7,17 +7,17 @@
 #
 # CUDA 11.8:
 #   pip install --index-url https://download.pytorch.org/whl/cu118 \
-#       torch==2.1.2 torchvision==0.16.2
+#       torch==2.6.0 torchvision==0.21.0
 #   pip install -r ViT/requirements.txt
 #
 # CUDA 12.1:
 #   pip install --index-url https://download.pytorch.org/whl/cu121 \
-#       torch==2.1.2 torchvision==0.16.2
+#       torch==2.6.0 torchvision==0.21.0
 #   pip install -r ViT/requirements.txt
 
 # Core — pinned to the exact commit used by apple/ml-sigma-reparam for reproducibility
-torch==2.1.2
-torchvision==0.16.2
+torch==2.6.0
+torchvision==0.21.0
 git+https://github.com/rwightman/pytorch-image-models@9ee846ff0cbbc05a99b45140aa6d84083bcf6488
 
 # Science / plotting
@@ -26,5 +26,5 @@ scipy==1.11.4
 matplotlib==3.8.2
 
 # Logging and data
-wandb==0.16.6
+wandb==0.19.11
 datasets==2.19.2
