@@ -21,18 +21,22 @@ entropy_collapse/
 │   │   ├── data_utils.py         # Data loading & batch sampling
 │   │   └── plotting.py           # Training-dynamics plot, MAD spike detection,
 │   │                             #   and Spearman/Pearson correlation helpers
-│   └── notebook.ipynb            # Original exploratory notebook
+│   ├── notebook.ipynb            # Original exploratory notebook
+│   ├── requirements.txt          # LLM-specific dependencies (Python 3.10/3.11)
+│   └── README.md                 # LLM setup and usage
 ├── ViT/                          # Vision Transformer experiments
 │   ├── base_train.py             # Main training + checkpointing entry-point
 │   ├── configs/
 │   │   └── train_config.py       # All experiment flags (qk_norm, dataset, …)
-│   └── src/
-│       ├── helpers.py            # Curvature helpers & attention entropy
-│       ├── model.py              # HookedViT — timm ViT with attention caching
-│       ├── data_utils.py         # CIFAR-10/100 / ImageNet data loaders
-│       └── plotting.py           # Training-dynamics plot, MAD spike detection,
-│                                 #   and Spearman/Pearson correlation helpers
-├── requirements.txt              # Python dependencies
+│   ├── src/
+│   │   ├── helpers.py            # Curvature helpers & attention entropy
+│   │   ├── model.py              # HookedViT — timm ViT with attention caching
+│   │   ├── data_utils.py         # CIFAR-10/100 / ImageNet data loaders
+│   │   └── plotting.py           # Training-dynamics plot, MAD spike detection,
+│   │                             #   and Spearman/Pearson correlation helpers
+│   ├── requirements.txt          # ViT-specific dependencies (Python 3.10)
+│   └── README.md                 # ViT setup and usage
+├── requirements.txt              # Combined root dependencies (convenience only)
 └── README.md                     # This file
 ```
 
@@ -41,90 +45,51 @@ correlation utilities are inlined directly rather than imported from a
 shared package.  This keeps the LLM and ViT experiments independent and
 easy to adapt.
 
+> **Recommended:** use the per-folder `requirements.txt` rather than the root
+> one.  The two experiment stacks have different Python and `timm` version
+> requirements — see [`LLM/README.md`](LLM/README.md) and
+> [`ViT/README.md`](ViT/README.md) for full setup instructions.
+
 ---
 
-## Clean Workspace Setup (Recommended)
+## Environment Setup
 
-The steps below are intended for a fresh machine / fresh clone and are
-tested for both LLM (NanoGPT-based) and ViT experiments.
+The two experiment families have different Python and `timm` version
+requirements, so each has its own `requirements.txt`.  See the dedicated
+READMEs for full instructions:
 
-### 1. Create and activate a Python virtual environment
+- **LLM / NanoGPT** — [`LLM/README.md`](LLM/README.md)  (Python 3.10 or 3.11)
+- **ViT** — [`ViT/README.md`](ViT/README.md)  (Python 3.10, mirrors
+  [apple/ml-sigma-reparam](https://github.com/apple/ml-sigma-reparam/blob/main/vision/environment.yaml))
 
-Use Python 3.10 or 3.11.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-```
-
-### 1b. Alternative: create a Conda environment
-
-If you prefer Conda, use this instead of `venv`.
-
-CPU / MPS (macOS) example:
+### LLM quick setup (venv, CPU/MPS)
 
 ```bash
-conda create -n entropy-collapse python=3.11 -y
-conda activate entropy-collapse
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
+python -m venv .venv-llm
+source .venv-llm/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r LLM/requirements.txt
 ```
 
-CUDA 11.8 (Linux) example:
+### ViT quick setup (venv, CPU/MPS)
 
 ```bash
-conda create -n entropy-collapse python=3.11 -y
-conda activate entropy-collapse
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install --index-url https://download.pytorch.org/whl/cu118 \
-    torch==2.1.2 torchvision==0.16.2
-python -m pip install -r requirements.txt
+python3.10 -m venv .venv-vit
+source .venv-vit/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r ViT/requirements.txt
 ```
 
-Note: for CUDA environments, install `torch`/`torchvision` with the CUDA
-index first (as above), then install the rest from `requirements.txt`.
-
-### 2. Install a stable, pinned package stack
-
-For best reproducibility, install pinned versions first, then install the
-project requirements.
-
-CPU / MPS (macOS) example:
-
-```bash
-pip install \
-    torch==2.1.2 torchvision==0.16.2 \
-    numpy==1.26.4 scipy==1.11.4 matplotlib==3.8.2 \
-    timm==0.9.12 wandb==0.16.6
-pip install -r requirements.txt
-```
-
-CUDA 11.8 example:
-
-```bash
-pip install --index-url https://download.pytorch.org/whl/cu118 \
-    torch==2.1.2 torchvision==0.16.2
-pip install \
-    numpy==1.26.4 scipy==1.11.4 matplotlib==3.8.2 \
-    timm==0.9.12 wandb==0.16.6
-pip install -r requirements.txt
-```
-
-### 3. Clone NanoGPT inside `LLM/` and prepare Shakespeare data
-
-All commands below assume you are in the repo root.
+### NanoGPT data preparation (LLM only)
 
 ```bash
 git clone https://github.com/karpathy/nanoGPT.git LLM/nanoGPT
 cd LLM/nanoGPT
-# Optional: pin to the exact commit you used in prior runs for strict reproducibility
-# git checkout <your-known-good-commit>
 python data/shakespeare_char/prepare.py
 cd ../..
 ```
 
-### 4. Smoke-test both experiment entry points
+### Smoke-test both experiment entry points
 
 ```bash
 python LLM/base_train.py --max_it 2 --hessian_freq 1 --entropy_freq 1 data_dir=LLM/nanoGPT/data/shakespeare_char
