@@ -94,9 +94,9 @@ for _arg in sys.argv[1:]:
             _config_cls = CONFIGS[_preset]
             print(f"[config] using preset '{_preset}' ({_config_cls.__name__})")
         else:
-            print(
-                f"[warn] unknown config preset '{_preset}'; "
-                f"available: {list(CONFIGS.keys())}. Using TrainConfig."
+            raise ValueError(
+                f"Unknown config preset '{_preset}'. "
+                f"Available presets: {list(CONFIGS.keys())}."
             )
         break
 
