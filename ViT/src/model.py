@@ -119,6 +119,10 @@ def build_hooked_vit(
     init_std: float = 0.002,
     use_scaled_init: bool = True,
     qk_norm: bool = False,
+    depth: Optional[int] = None,
+    num_heads: Optional[int] = None,
+    embed_dim: Optional[int] = None,
+    patch_size: Optional[int] = None,
     device: str = "cuda",
 ) -> torch.nn.Module:
     """
@@ -146,6 +150,18 @@ def build_hooked_vit(
                           ``Identity`` — matching the NanoGPT / LLM experiment
                           setup.  If ``True``, timm installs per-head LayerNorm
                           on the query and key projections.
+        depth:            Override the number of transformer layers.  ``None``
+                          uses the timm model default.  Set to 6 to match
+                          NanoGPT-small (``n_layer=6``).
+        num_heads:        Override the number of attention heads.  ``None``
+                          uses the timm model default.  Set to 6 to match
+                          NanoGPT-small (``n_head=6``).
+        embed_dim:        Override the embedding dimension.  ``None`` uses the
+                          timm model default.  Set to 384 to match NanoGPT-small
+                          (``n_embd=384``).
+        patch_size:       Override the patch size.  ``None`` uses the timm model
+                          default.  Set to 4 with ``img_size=32`` for CIFAR
+                          (64 patches = NanoGPT-small ``block_size=64``).
         device:           Target device string.
 
     Returns:
@@ -153,12 +169,25 @@ def build_hooked_vit(
     """
     import timm  # imported here so the module is importable without timm installed
 
+    # Collect architecture overrides; only pass non-None values so the timm
+    # model's built-in defaults are preserved when not explicitly overridden.
+    arch_kwargs: dict = {}
+    if depth is not None:
+        arch_kwargs["depth"] = depth
+    if num_heads is not None:
+        arch_kwargs["num_heads"] = num_heads
+    if embed_dim is not None:
+        arch_kwargs["embed_dim"] = embed_dim
+    if patch_size is not None:
+        arch_kwargs["patch_size"] = patch_size
+
     model = timm.create_model(
         model_name,
         pretrained=pretrained,
         num_classes=num_classes,
         img_size=img_size,
         qk_norm=qk_norm,
+        **arch_kwargs,
     )
 
     # ------------------------------------------------------------------ #

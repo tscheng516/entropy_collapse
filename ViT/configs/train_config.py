@@ -5,9 +5,23 @@ All flags that control learning rate, model initialisation, training
 dynamics, Hessian metric computation frequency, and attention entropy
 logging are gathered here in a single dataclass so that experiments are
 fully reproducible from a printed config snapshot.
+
+Preset configs
+--------------
+A registry of named presets is exported as ``CONFIGS``:
+
+    from configs.train_config import CONFIGS
+    cfg = CONFIGS["cifar100_small"]()
+
+Or load a preset directly from the CLI::
+
+    python base_train.py config=cifar100_small
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -101,6 +115,37 @@ class TrainConfig:
     """
     Spatial resolution fed to the model.
     CIFAR images (32×32) are upsampled to this size by the data pipeline.
+    """
+
+    # Architecture overrides (passed as kwargs to timm.create_model).
+    # ``None`` means "use the timm model's built-in default".
+    depth: Optional[int] = None
+    """
+    Number of transformer layers.  ``None`` uses the timm model default
+    (e.g. 12 for ``vit_small_patch16_224``).
+    Set to 6 to match the NanoGPT-small depth (``n_layer=6``).
+    """
+
+    num_heads: Optional[int] = None
+    """
+    Number of attention heads per layer.  ``None`` uses the timm model
+    default (e.g. 6 for ``vit_small_patch16_224``).
+    Set to 6 to match NanoGPT-small (``n_head=6``).
+    """
+
+    embed_dim: Optional[int] = None
+    """
+    Embedding / hidden dimension.  ``None`` uses the timm model default
+    (e.g. 384 for ``vit_small_patch16_224``).
+    Set to 384 to match NanoGPT-small (``n_embd=384``).
+    """
+
+    patch_size: Optional[int] = None
+    """
+    Patch size for the patch-embedding convolution.  ``None`` uses the
+    timm model default (e.g. 16 for ``vit_small_patch16_224``).
+    Set to 4 with ``img_size=32`` for native CIFAR resolution: (32/4)² = 64
+    patches, which matches NanoGPT-small's context length (``block_size=64``).
     """
 
     # ------------------------------------------------------------------ #
@@ -223,3 +268,82 @@ class TrainConfig:
 
     seed: int = 1337
     """Random seed for reproducibility."""
+
+
+# ---------------------------------------------------------------------------
+# Named preset configs
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ViTSmallCIFAR100Config(TrainConfig):
+    """
+    ViT configuration comparable to the NanoGPT-small (d=6) LLM experiment,
+    adapted for CIFAR-100.
+
+    Architecture parity with NanoGPT-small (LLM/configs/train_config.py):
+
+    +--------------+-----------------------+------------------+
+    | Dimension    | NanoGPT-small         | This ViT config  |
+    +--------------+-----------------------+------------------+
+    | Depth        | n_layer = 6           | depth = 6        |
+    | Heads        | n_head  = 6           | num_heads = 6    |
+    | Hidden dim   | n_embd  = 384         | embed_dim = 384  |
+    | Seq length   | block_size = 64 tok   | 64 patches *     |
+    +--------------+-----------------------+------------------+
+
+    * patch_size=4 on 32×32 CIFAR images → (32/4)² = 64 patches, exactly
+      matching NanoGPT-small's context length of 64 tokens.  Both models
+      therefore process sequences of length 64 per sample.
+
+    Both architectures use:
+      - 6 transformer layers
+      - 6 attention heads
+      - 384-dimensional embeddings
+      - MLP expansion ratio of 4× (≈ 1536 hidden units)
+      - No QK normalisation (``qk_norm=False``)
+      - Small-std weight initialisation with residual-depth scaling
+
+    This yields roughly comparable total parameter counts (~10.7 M each)
+    and makes cross-modal comparisons of entropy / Hessian dynamics
+    straightforward.
+
+    Usage::
+
+        python base_train.py config=cifar100_small
+
+    Individual fields can still be overridden via the usual CLI syntax::
+
+        python base_train.py config=cifar100_small --lr 5e-4 max_iters=2000
+    """
+
+    # ----- Data -----
+    dataset: str = "cifar100"
+    num_classes: int = 100
+
+    # ----- Image / patch geometry -----
+    img_size: int = 32
+    """Native CIFAR resolution — no upsampling needed with patch_size=4."""
+    patch_size: int = 4
+    """4×4 patches on 32×32 images → 64 patches (= NanoGPT block_size=64)."""
+
+    # ----- Architecture (NanoGPT-small parity) -----
+    model_name: str = "vit_small_patch16_224"
+    """timm base template; depth/embed_dim/num_heads are overridden below."""
+    depth: int = 6
+    """6 transformer layers — matches NanoGPT-small n_layer=6."""
+    num_heads: int = 6
+    """6 attention heads — matches NanoGPT-small n_head=6."""
+    embed_dim: int = 384
+    """384-dim embeddings — matches NanoGPT-small n_embd=384."""
+
+    # ----- Output -----
+    out_dir: str = "vit_out_cifar100_small"
+    wandb_run_name: str = "cifar100_d6"
+
+
+# Registry mapping preset names to config classes.  Add entries here to
+# expose additional presets to the ``config=<name>`` CLI argument.
+CONFIGS: dict[str, type[TrainConfig]] = {
+    "default": TrainConfig,
+    "cifar100_small": ViTSmallCIFAR100Config,
+}
