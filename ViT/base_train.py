@@ -80,9 +80,27 @@ if _SCRIPT_DIR not in sys.path:
 # ---------------------------------------------------------------------------
 # 1.  Default configuration (loaded from dataclass, then CLI overrides)
 # ---------------------------------------------------------------------------
-from configs.train_config import TrainConfig  # noqa: E402
+from configs.train_config import TrainConfig, CONFIGS  # noqa: E402
 
-cfg = TrainConfig()
+# Allow ``config=<preset>`` as a CLI argument to select a named config class
+# before the dataclass is instantiated.  This must be parsed first so that
+# preset defaults are in place before individual key=value overrides are
+# applied further below.
+_config_cls = TrainConfig
+for _arg in sys.argv[1:]:
+    if _arg.startswith("config="):
+        _preset = _arg.split("=", 1)[1].strip()
+        if _preset in CONFIGS:
+            _config_cls = CONFIGS[_preset]
+            print(f"[config] using preset '{_preset}' ({_config_cls.__name__})")
+        else:
+            print(
+                f"[warn] unknown config preset '{_preset}'; "
+                f"available: {list(CONFIGS.keys())}. Using TrainConfig."
+            )
+        break
+
+cfg = _config_cls()
 
 # NanoGPT-style CLI overrides: python base_train.py learning_rate=1e-4 ...
 # Short argparse flags are also supported, e.g. ``--lr 1e-4 --optim adamw``.
@@ -256,6 +274,10 @@ if cfg.init_from == "scratch":
         init_std=cfg.init_std,
         use_scaled_init=cfg.use_scaled_init,
         qk_norm=cfg.qk_norm,
+        depth=cfg.depth,
+        num_heads=cfg.num_heads,
+        embed_dim=cfg.embed_dim,
+        patch_size=cfg.patch_size,
         device=device,
     )
 
@@ -285,6 +307,10 @@ elif cfg.init_from == "resume":
         init_std=cfg.init_std,
         use_scaled_init=False,
         qk_norm=ckpt_qk_norm,
+        depth=checkpoint.get("depth"),
+        num_heads=checkpoint.get("num_heads"),
+        embed_dim=checkpoint.get("embed_dim"),
+        patch_size=checkpoint.get("patch_size"),
         device=device,
     )
     state_dict = _strip_compile_prefix(checkpoint["model"])
@@ -318,6 +344,10 @@ else:
         init_std=cfg.init_std,
         use_scaled_init=False,
         qk_norm=ckpt_qk_norm,
+        depth=checkpoint.get("depth"),
+        num_heads=checkpoint.get("num_heads"),
+        embed_dim=checkpoint.get("embed_dim"),
+        patch_size=checkpoint.get("patch_size"),
         device=device,
     )
     state_dict = _strip_compile_prefix(checkpoint["model"])
@@ -448,6 +478,10 @@ def _save_checkpoint(suffix: str = "ckpt") -> None:
             "model_name": cfg.model_name,
             "num_classes": cfg.num_classes,
             "qk_norm": cfg.qk_norm,
+            "depth": cfg.depth,
+            "num_heads": cfg.num_heads,
+            "embed_dim": cfg.embed_dim,
+            "patch_size": cfg.patch_size,
             "config": vars(cfg),
         }
         path = os.path.join(run_out_dir, f"{suffix}.pt")
