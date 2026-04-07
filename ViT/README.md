@@ -65,12 +65,13 @@ python ViT/base_train.py
 
 ```bash
 python ViT/base_train.py \
+    config=cifar100_small \
     dataset=cifar100 \
-    data_dir=ViT/data/cifar100 \
+    data_dir=ViT/data/ \
     num_classes=100 \
     --optim adamw \
     --lr 1e-3 \
-    --max_it 5000
+    --max_it 1000
 ```
 
 ### Train on ImageNet-1k (Hugging Face streaming)

@@ -104,8 +104,9 @@ def _patched_attn_forward(
 
     attn = self.attn_drop(attn)
     x = (attn @ v).transpose(1, 2).reshape(B, N, attn_dim)
-    # Post-attention norm (identity by default).
-    x = self.norm(x)
+    _norm = getattr(self, "norm", None)                                                                                                                                          
+    if _norm is not None:                                                                                                                                                        
+        x = _norm(x)
     x = self.proj(x)
     x = self.proj_drop(x)
     return x
