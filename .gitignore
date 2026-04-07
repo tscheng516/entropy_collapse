@@ -15,6 +15,9 @@ nanoGPT/
 # W&B
 wandb/
 
+# Claude
+claude/
+
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
 
