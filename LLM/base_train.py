@@ -122,6 +122,16 @@ parser.add_argument("--lr", type=float, help="peak learning rate")
 parser.add_argument("--max_it", type=int, help="number of training iterations")
 parser.add_argument("--wandb", type=str, help="enable wandb logging (true/false)")
 parser.add_argument("--z", type=float, help="MAD z-score for spike detection/plots")
+parser.add_argument(
+    "--temp_shift",
+    type=int,
+    default=None,
+    metavar="STEP",
+    help=(
+        "Training step at which a one-time temperature-shift intervention is "
+        "applied to all attention heads (-1 disables, default: cfg.temp_shift_step)."
+    ),
+)
 known_args, _ = parser.parse_known_args()
 
 def _maybe_set(attr, val, conv=lambda x: x):
@@ -140,6 +150,7 @@ if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
 _maybe_set("z_score", known_args.z)
+_maybe_set("temp_shift_step", known_args.temp_shift)
 
 # ---------------------------------------------------------------------------
 # 2.  Reproducibility & device
@@ -235,7 +246,7 @@ def _get_val_batch():
 # 4.  Model
 # ---------------------------------------------------------------------------
 from model import GPTConfig  # noqa: E402  (via NANOGPT_DIR)
-from src.model import build_hooked_gpt  # noqa: E402
+from src.model import build_hooked_gpt, set_attention_temperature  # noqa: E402
 
 iter_num = 0
 best_val_loss = float("inf")
@@ -452,6 +463,16 @@ for iter_num in range(iter_num, cfg.max_iters):
     lr = get_lr(iter_num)
     for pg in optimizer.param_groups:
         pg["lr"] = lr
+
+    # ---- Temperature-shift intervention ----
+    if cfg.temp_shift_step >= 0 and iter_num == cfg.temp_shift_step:
+        set_attention_temperature(model, cfg.temp_shift_factor)
+        print(
+            f"[temp_shift] iter {iter_num}: applied temperature={cfg.temp_shift_factor:.4g} "
+            f"to all attention heads"
+        )
+        if cfg.wandb_log and (not use_ddp or rank == 0):
+            wandb.log({"intervention/temp_shift_factor": cfg.temp_shift_factor}, step=iter_num)
 
     # ---- Periodic evaluation ----
     if iter_num % cfg.eval_interval == 0 or iter_num == cfg.max_iters - 1:

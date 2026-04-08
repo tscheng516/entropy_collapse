@@ -9,6 +9,10 @@ Additions over the base ``GPT``:
   * Flash-attention is **disabled** by default; the explicit softmax path
     is required for (a) caching attention matrices and (b) second-order
     gradient computations via ``torch.autograd``.
+  * Runtime attention temperature support: set ``attn.temperature`` on
+    any attention block (or call ``set_attention_temperature``) to scale
+    the attention logits, producing sharper (T < 1) or softer (T > 1)
+    attention distributions for entropy-collapse interventions.
 
 The NanoGPT repository must be on ``sys.path`` before importing this
 module (see ``base_train.py`` for how the path is appended at runtime).
@@ -27,6 +31,9 @@ def _patched_attn_forward(self, x: torch.Tensor) -> torch.Tensor:
       1. Computes the explicit (non-flash) causal softmax-attention.
       2. Caches the attention weight tensor as ``self.last_att`` for
          downstream entropy measurements.
+      3. Applies an optional ``self.temperature`` scale factor to the
+         attention logits (default 1.0 = no change).  Values > 1 soften
+         the distribution; values < 1 sharpen it.
 
     The signature and output are identical to the original, so the rest
     of the model is unaffected.
@@ -38,7 +45,8 @@ def _patched_attn_forward(self, x: torch.Tensor) -> torch.Tensor:
     q = q.view(B, T, self.n_head, head_size).transpose(1, 2)
     v = v.view(B, T, self.n_head, head_size).transpose(1, 2)
 
-    att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(head_size))
+    temperature = getattr(self, "temperature", 1.0)
+    att = (q @ k.transpose(-2, -1)) * (1.0 / (math.sqrt(head_size) * temperature))
     att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
     att = F.softmax(att, dim=-1)
 
@@ -129,3 +137,22 @@ def build_hooked_gpt(
 
     model.to(device)
     return model
+
+
+def set_attention_temperature(model: "GPT", temperature: float) -> None:  # noqa: F821
+    """
+    Set the attention temperature on every transformer block of a
+    (possibly DDP-wrapped) ``GPT`` model.
+
+    A temperature > 1 softens the attention distribution (higher entropy);
+    a temperature < 1 sharpens it (lower entropy).  The change is applied
+    in-place and persists for all subsequent forward passes.
+
+    Args:
+        model:       A ``GPT`` instance, or a ``DistributedDataParallel``
+                     wrapper around one.
+        temperature: Positive float.  1.0 restores the default behaviour.
+    """
+    raw = model.module if hasattr(model, "module") else model
+    for block in raw.transformer.h:
+        block.attn.temperature = temperature

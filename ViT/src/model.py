@@ -13,6 +13,10 @@ Additions over the base timm ViT:
     which matches the NanoGPT / LLM experiment setup where no QK-norm is
     applied.  Set ``qk_norm=True`` to install per-head LayerNorm on the
     query and key projections (timm's native ``qk_norm`` feature).
+  * Runtime attention temperature support: set ``attn.temperature`` on
+    any attention block (or call ``set_attention_temperature``) to scale
+    the attention logits, producing sharper (T < 1) or softer (T > 1)
+    attention distributions for entropy-collapse interventions.
 
 Usage::
 
@@ -56,6 +60,9 @@ def _patched_attn_forward(
       1. Computes the explicit (non-fused) softmax-attention.
       2. Caches the attention weight tensor as ``self.last_att`` for
          downstream entropy measurements.
+      3. Applies an optional ``self.temperature`` scale factor to the
+         attention logits (default 1.0 = no change).  Values > 1 soften
+         the distribution; values < 1 sharpen it.
 
     The signature matches timm ≥ 0.9 (which passes ``attn_mask`` and
     ``is_causal`` from the enclosing Block) and is backward-compatible
@@ -83,7 +90,8 @@ def _patched_attn_forward(
     k = self.k_norm(k)
 
     # Explicit softmax attention — bypass fused_attn / SDPA entirely.
-    attn = (q * self.scale) @ k.transpose(-2, -1)  # (B, heads, N, N)
+    temperature = getattr(self, "temperature", 1.0)
+    attn = (q * (self.scale / temperature)) @ k.transpose(-2, -1)  # (B, heads, N, N)
 
     # Handle optional attention mask (mirrors timm's non-fused path).
     if is_causal:
@@ -225,3 +233,22 @@ def build_hooked_vit(
 
     model.to(device)
     return model
+
+
+def set_attention_temperature(model: torch.nn.Module, temperature: float) -> None:
+    """
+    Set the attention temperature on every transformer block of a
+    (possibly DDP-wrapped) timm ViT model.
+
+    A temperature > 1 softens the attention distribution (higher entropy);
+    a temperature < 1 sharpens it (lower entropy).  The change is applied
+    in-place and persists for all subsequent forward passes.
+
+    Args:
+        model:       A timm ViT instance, or a ``DistributedDataParallel``
+                     wrapper around one.
+        temperature: Positive float.  1.0 restores the default behaviour.
+    """
+    raw = model.module if hasattr(model, "module") else model
+    for block in raw.blocks:
+        block.attn.temperature = temperature
