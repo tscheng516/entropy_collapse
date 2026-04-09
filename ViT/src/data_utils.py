@@ -1,12 +1,11 @@
 """
 Data utilities for the ViT entropy-collapse experiments.
 
-Supports three dataset backends:
+Supports the following dataset backends:
   * CIFAR-10   — auto-downloaded via torchvision (default for pilot tests).
   * CIFAR-100  — auto-downloaded via torchvision.
-    * ImageNet-1k — loaded from an ImageFolder directory tree (requires the
-                 dataset to be present on disk in train/ and val/ sub-dirs).
-    * ImageNet HF — loaded directly from Hugging Face ``imagenet-1k``.
+  * ImageNet-1k — loaded from a local ImageFolder directory tree if present,
+                  otherwise downloaded and cached via Hugging Face ``datasets``.
 
 All datasets are returned as ``(train_loader, val_loader)`` pairs.  Images
 are resized to ``img_size × img_size`` and normalised with ImageNet statistics
@@ -124,35 +123,40 @@ def load_data(
             root=data_dir, train=False, download=True, transform=val_tf
         )
 
-    elif dataset_key in ("imagenet", "imagenet1k"):
+    elif dataset_key in (
+        "imagenet", "imagenet1k",
+        "imagenet_hf", "imagenet1k_hf", "hf_imagenet",
+    ):
         train_path = os.path.join(data_dir, "train")
         val_path = os.path.join(data_dir, "val")
-        if not os.path.isdir(train_path):
-            raise FileNotFoundError(
-                f"ImageNet train split not found at '{train_path}'. "
-                "Ensure data_dir contains 'train/' and 'val/' sub-directories "
-                "in ImageFolder format."
+        if os.path.isdir(train_path) and os.path.isdir(val_path):
+            print(f"[data] loading local ImageNet from '{data_dir}'")
+            train_ds = torchvision.datasets.ImageFolder(train_path, transform=train_tf)
+            val_ds = torchvision.datasets.ImageFolder(val_path, transform=val_tf)
+        else:
+            # Download via HF and cache locally; subsequent runs reuse the cache.
+            print(
+                f"[data] local ImageNet not found at '{data_dir}', "
+                "downloading from Hugging Face (cached for future runs) …"
             )
-        if not os.path.isdir(val_path):
-            raise FileNotFoundError(
-                f"ImageNet val split not found at '{val_path}'."
+            try:
+                from datasets import load_dataset
+            except ImportError as exc:
+                raise ImportError(
+                    "Hugging Face fallback requires the 'datasets' package. "
+                    "Install with: pip install datasets"
+                ) from exc
+
+            train_hf = load_dataset(
+                "imagenet-1k", split="train",
+                cache_dir=data_dir, token=True,
             )
-        train_ds = torchvision.datasets.ImageFolder(train_path, transform=train_tf)
-        val_ds = torchvision.datasets.ImageFolder(val_path, transform=val_tf)
-
-    elif dataset_key in ("imagenet_hf", "imagenet1k_hf", "hf_imagenet"):
-        try:
-            from datasets import load_dataset
-        except ImportError as exc:
-            raise ImportError(
-                "Hugging Face dataset backend requires 'datasets'. "
-                "Install with: pip install datasets"
-            ) from exc
-
-        train_hf = load_dataset("imagenet-1k", split="train", cache_dir=data_dir)
-        val_hf = load_dataset("imagenet-1k", split="validation", cache_dir=data_dir)
-        train_ds = _HFDatasetWrapper(train_hf, transform=train_tf)
-        val_ds = _HFDatasetWrapper(val_hf, transform=val_tf)
+            val_hf = load_dataset(
+                "imagenet-1k", split="validation",
+                cache_dir=data_dir, token=True,
+            )
+            train_ds = _HFDatasetWrapper(train_hf, transform=train_tf)
+            val_ds = _HFDatasetWrapper(val_hf, transform=val_tf)
 
     else:
         raise ValueError(

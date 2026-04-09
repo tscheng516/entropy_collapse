@@ -57,25 +57,39 @@ python ViT/base_train.py \
     --max_it 1000
 ```
 
-### Train on ImageNet-1k (Hugging Face streaming)
+### Train on ImageNet-1k
+
+ImageNet-1k is a **gated dataset** on Hugging Face — you need to:
+
+1. Accept the licence at <https://huggingface.co/datasets/imagenet-1k>
+2. Create a [Hugging Face access token](https://huggingface.co/settings/tokens)
+3. Export it before running:
 
 ```bash
-python ViT/base_train.py \
-    dataset=imagenet_hf \
-    data_dir=ViT/data/imagenet1k_hf \
-    num_classes=1000 \
-    --optim adamw \
-    --lr 1e-3 \
-    --max_it 1000
+export HF_TOKEN=hf_...
 ```
 
-If you already have local ImageNet in `ImageFolder` layout:
+#### Option A — Local ImageFolder data
+
+If you already have ImageNet-1k on disk in `ImageFolder` layout
+(`train/` and `val/` sub-directories), point `data_dir` at it:
 
 ```bash
 python ViT/base_train.py \
-    dataset=imagenet \
-    data_dir=/path/to/imagenet \
-    num_classes=1000
+    config=imagenet1k_base \
+    data_dir=/path/to/imagenet
+```
+
+#### Option B — Automatic Hugging Face download
+
+When `data_dir` does **not** contain `train/` and `val/` folders, the
+dataset is automatically downloaded from Hugging Face and cached locally.
+Subsequent runs reuse the cache — no re-download needed:
+
+```bash
+python ViT/base_train.py \
+    config=imagenet1k_base \
+    data_dir=ViT/data/imagenet1k
 ```
 
 ### Override core flags
