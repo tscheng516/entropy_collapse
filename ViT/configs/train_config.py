@@ -245,6 +245,30 @@ class TrainConfig:
     """
 
     # ------------------------------------------------------------------ #
+    # Temperature-shift intervention
+    # ------------------------------------------------------------------ #
+    temp_shift_step: int = -1
+    """
+    Training step at which a one-time temperature-shift intervention is
+    applied to all attention heads.  A value of -1 (default) disables
+    the intervention entirely.  When set to a non-negative integer, at
+    that iteration the attention logit scale is divided by
+    ``temp_shift_factor``, making the softmax distribution softer
+    (higher entropy) for factor > 1 and sharper (lower entropy) for
+    factor < 1.  This provides an alternative to large-LR perturbations
+    for producing spikes in the Hessian / entropy metrics.
+    """
+
+    temp_shift_factor: float = 2.0
+    """
+    Multiplicative factor applied to the attention temperature at
+    ``temp_shift_step``.  Values > 1 soften the attention distribution
+    (entropy increases); values < 1 sharpen it (entropy decreases).
+    A value of 2.0 matches the typical intervention magnitude used in
+    the entropy-collapse literature.
+    """
+
+    # ------------------------------------------------------------------ #
     # Spike detection / MAD analysis
     # ------------------------------------------------------------------ #
     z_score: float = 3.0

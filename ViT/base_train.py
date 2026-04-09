@@ -124,6 +124,16 @@ parser.add_argument("--lr", type=float)
 parser.add_argument("--max_it", type=int)
 parser.add_argument("--wandb", type=str)
 parser.add_argument("--z", type=float)
+parser.add_argument(
+    "--temp_shift",
+    type=int,
+    default=None,
+    metavar="STEP",
+    help=(
+        "Training step at which a one-time temperature-shift intervention is "
+        "applied to all attention heads (-1 disables, default: cfg.temp_shift_step)."
+    ),
+)
 known_args, _ = parser.parse_known_args()
 
 
@@ -144,6 +154,7 @@ if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
 _maybe_set("z_score", known_args.z)
+_maybe_set("temp_shift_step", known_args.temp_shift)
 
 
 def _expected_num_classes(dataset_name: str) -> int | None:
@@ -250,7 +261,7 @@ print(
 # ---------------------------------------------------------------------------
 # 4.  Model
 # ---------------------------------------------------------------------------
-from src.model import build_hooked_vit  # noqa: E402
+from src.model import build_hooked_vit, set_attention_temperature  # noqa: E402
 
 iter_num = 0
 best_val_loss = float("inf")
@@ -521,6 +532,16 @@ for iter_num in range(iter_num, cfg.max_iters):
     lr = get_lr(iter_num)
     for pg in optimizer.param_groups:
         pg["lr"] = lr
+
+    # ---- Temperature-shift intervention ----
+    if cfg.temp_shift_step >= 0 and iter_num == cfg.temp_shift_step:
+        set_attention_temperature(model, cfg.temp_shift_factor)
+        print(
+            f"[temp_shift] iter {iter_num}: applied temperature={cfg.temp_shift_factor:.4g} "
+            f"to all attention heads"
+        )
+        if cfg.wandb_log and (not use_ddp or rank == 0):
+            wandb.log({"intervention/temp_shift_factor": cfg.temp_shift_factor}, step=iter_num)
 
     # ---- Periodic evaluation ----
     if iter_num % cfg.eval_interval == 0 or iter_num == cfg.max_iters - 1:
