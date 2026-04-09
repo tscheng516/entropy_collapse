@@ -32,23 +32,6 @@ pip install --upgrade pip setuptools wheel
 pip install -r ViT/requirements.txt
 ```
 
-### CUDA variants
-
-For **CUDA 11.8**, install the GPU-enabled wheels first, then the rest:
-
-```bash
-pip install --index-url https://download.pytorch.org/whl/cu118 \
-    torch==2.6.0 torchvision==0.21.0
-pip install -r ViT/requirements.txt
-```
-
-For **CUDA 12.1**, replace `cu118` with `cu121`.
-
-> **Note on `timm`:** `ViT/requirements.txt` installs `timm` directly from the
-> exact git commit used by the apple/ml-sigma-reparam paper
-> (`9ee846ff0cbbc05a99b45140aa6d84083bcf6488`).  This ensures identical model
-> definitions and avoids API drift in newer timm releases.
-
 ---
 
 ## Quick Start
@@ -83,7 +66,7 @@ python ViT/base_train.py \
     num_classes=1000 \
     --optim adamw \
     --lr 1e-3 \
-    --max_it 5000
+    --max_it 1000
 ```
 
 If you already have local ImageNet in `ImageFolder` layout:
@@ -119,34 +102,6 @@ python ViT/base_train.py \
 | `--max_it` | `max_iters` | `5000` |
 | `--wandb` | `wandb_log` | `false` |
 | `--z` | `z_score` | `3` |
-
----
-
-## Smoke Test
-
-```bash
-python ViT/base_train.py --max_it 2 --hessian_freq 1 --entropy_freq 1
-```
-
----
-
-## Reproducing apple/ml-sigma-reparam Results
-
-The ViT model is built with `timm` and supports optional QK normalisation
-(controlled by the `qk_norm` flag, default `False`).
-
-To replicate the sigma-reparametrisation experiments from the apple paper,
-enable QK normalisation:
-
-```bash
-python ViT/base_train.py \
-    qk_norm=True \
-    --optim adamw \
-    --lr 1e-3 \
-    --max_it 5000 \
-    --wandb true \
-    wandb_run_name=vit-qknorm
-```
 
 ---
 

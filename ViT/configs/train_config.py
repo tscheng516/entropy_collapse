@@ -1,11 +1,6 @@
 """
 Training configuration for the ViT entropy-collapse experiments.
 
-All flags that control learning rate, model initialisation, training
-dynamics, Hessian metric computation frequency, and attention entropy
-logging are gathered here in a single dataclass so that experiments are
-fully reproducible from a printed config snapshot.
-
 Preset configs
 --------------
 A registry of named presets is exported as ``CONFIGS``:
@@ -24,26 +19,27 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+_DATASET_DEFAULTS: dict[str, dict[str, int]] = {
+    "cifar10": {"num_classes": 10, "img_size": 32},
+    "cifar100": {"num_classes": 100, "img_size": 32},
+    "imagenet": {"num_classes": 1000, "img_size": 224},
+    "imagenet1k": {"num_classes": 1000, "img_size": 224},
+    "imagenet_hf": {"num_classes": 1000, "img_size": 224},
+    "imagenet1k_hf": {"num_classes": 1000, "img_size": 224},
+    "hf_imagenet": {"num_classes": 1000, "img_size": 224},
+}
+
+
 @dataclass
 class TrainConfig:
     # ------------------------------------------------------------------ #
     # I/O
     # ------------------------------------------------------------------ #
     out_dir: str = "out"
-    """Directory for checkpoints and logs."""
-
     eval_interval: int = 200
-    """How often (in iterations) to evaluate on the validation set."""
-
     log_interval: int = 1
-    """How often (in iterations) to log train loss to stdout / wandb."""
-
     checkpoint_interval: int = 500
-    """Save a checkpoint every N iterations (in addition to best-loss saves)."""
-
-    always_save_checkpoint: bool = True
-    """If True, save a checkpoint after every eval, not just when val loss improves."""
-
+    save_checkpoint: bool = True
     init_from: str = "scratch"
     """
     'scratch'  — initialise a fresh model with custom init_std weights.
@@ -55,13 +51,8 @@ class TrainConfig:
     # Weights & Biases
     # ------------------------------------------------------------------ #
     wandb_log: bool = True
-    """Enable Weights & Biases logging."""
-
     wandb_project: str = "entropy-collapse-vit"
-    """W&B project name."""
-
     wandb_run_name: str = "run"
-    """W&B run name (auto-appended with timestamp when empty)."""
 
     # ------------------------------------------------------------------ #
     # Data
@@ -85,10 +76,7 @@ class TrainConfig:
     """
 
     batch_size: int = 64
-    """Number of images per batch."""
-
     num_workers: int = 4
-    """Number of DataLoader worker processes."""
 
     # ------------------------------------------------------------------ #
     # Model
@@ -108,70 +96,31 @@ class TrainConfig:
     most visible from random initialisation).
     """
 
-    num_classes: int = 10
-    """Number of output classes (10 for CIFAR-10, 100 for CIFAR-100, 1000 for ImageNet)."""
+    num_classes: Optional[int] = None
+    """
+    Number of output classes.
+    If ``None``, this is inferred from ``dataset``.
+    """
 
-    img_size: int = 224
+    img_size: Optional[int] = None
     """
     Spatial resolution fed to the model.
-    CIFAR images (32×32) are upsampled to this size by the data pipeline.
+    If ``None``, this is inferred from ``dataset``.
     """
 
     # Architecture overrides (passed as kwargs to timm.create_model).
     # ``None`` means "use the timm model's built-in default".
     depth: Optional[int] = None
-    """
-    Number of transformer layers.  ``None`` uses the timm model default
-    (e.g. 12 for ``vit_small_patch16_224``).
-    Set to 6 to match the NanoGPT-small depth (``n_layer=6``).
-    """
-
     num_heads: Optional[int] = None
-    """
-    Number of attention heads per layer.  ``None`` uses the timm model
-    default (e.g. 6 for ``vit_small_patch16_224``).
-    Set to 6 to match NanoGPT-small (``n_head=6``).
-    """
-
     embed_dim: Optional[int] = None
-    """
-    Embedding / hidden dimension.  ``None`` uses the timm model default
-    (e.g. 384 for ``vit_small_patch16_224``).
-    Set to 384 to match NanoGPT-small (``n_embd=384``).
-    """
-
     patch_size: Optional[int] = None
-    """
-    Patch size for the patch-embedding convolution.  ``None`` uses the
-    timm model default (e.g. 16 for ``vit_small_patch16_224``).
-    Set to 4 with ``img_size=32`` for native CIFAR resolution: (32/4)² = 64
-    patches, which matches NanoGPT-small's context length (``block_size=64``).
-    """
 
     # ------------------------------------------------------------------ #
     # Weight initialisation
     # ------------------------------------------------------------------ #
     init_std: float = 0.002
-    """
-    Standard deviation for all weight matrices when ``init_from='scratch'``.
-    A small value places the model near the origin, making early-training
-    Hessian dynamics easier to observe.
-    """
-
     use_scaled_init: bool = True
-    """
-    If True, scale each attention output-projection (``attn.proj``)
-    weight by ``init_std / sqrt(2 * n_layers)`` — the ViT analogue of
-    NanoGPT's residual-depth scaling.
-    """
-
     qk_norm: bool = False
-    """
-    If False (default), query and key projections use no normalisation —
-    matching the NanoGPT / LLM experiment setup where no QK-norm is applied.
-    If True, per-head LayerNorm is installed on the query and key projections
-    via timm's native ``qk_norm`` option.
-    """
 
     # ------------------------------------------------------------------ #
     # Optimiser
@@ -179,7 +128,7 @@ class TrainConfig:
     optimizer: str = "adamw"
     """'adamw' or 'sgd'."""
 
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e-5
     """Peak learning rate."""
 
     max_iters: int = 1000
@@ -248,25 +197,7 @@ class TrainConfig:
     # Temperature-shift intervention
     # ------------------------------------------------------------------ #
     temp_shift_step: int = -1
-    """
-    Training step at which a one-time temperature-shift intervention is
-    applied to all attention heads.  A value of -1 (default) disables
-    the intervention entirely.  When set to a non-negative integer, at
-    that iteration the attention logit scale is divided by
-    ``temp_shift_factor``, making the softmax distribution softer
-    (higher entropy) for factor > 1 and sharper (lower entropy) for
-    factor < 1.  This provides an alternative to large-LR perturbations
-    for producing spikes in the Hessian / entropy metrics.
-    """
-
     temp_shift_factor: float = 2.0
-    """
-    Multiplicative factor applied to the attention temperature at
-    ``temp_shift_step``.  Values > 1 soften the attention distribution
-    (entropy increases); values < 1 sharpen it (entropy decreases).
-    A value of 2.0 matches the typical intervention magnitude used in
-    the entropy-collapse literature.
-    """
 
     # ------------------------------------------------------------------ #
     # Spike detection / MAD analysis
@@ -292,6 +223,16 @@ class TrainConfig:
 
     seed: int = 1337
     """Random seed for reproducibility."""
+
+    def __post_init__(self) -> None:
+        ds = self.dataset.lower()
+        defaults = _DATASET_DEFAULTS.get(ds)
+        if defaults is None:
+            return
+        if self.num_classes is None:
+            self.num_classes = defaults["num_classes"]
+        if self.img_size is None:
+            self.img_size = defaults["img_size"]
 
 
 # ---------------------------------------------------------------------------
@@ -343,27 +284,18 @@ class ViTSmallCIFAR100Config(TrainConfig):
     # ----- Data -----
     dataset: str = "cifar100"
     num_classes: int = 100
-
     # ----- Image / patch geometry -----
     img_size: int = 32
-    """Native CIFAR resolution — no upsampling needed with patch_size=4."""
     patch_size: int = 4
-    """4×4 patches on 32×32 images → 64 patches (= NanoGPT block_size=64)."""
-
     # ----- Architecture (NanoGPT-small parity) -----
     model_name: str = "vit_small_patch16_224"
-    """timm base template; depth/embed_dim/num_heads are overridden below."""
     depth: int = 6
-    """6 transformer layers — matches NanoGPT-small n_layer=6."""
     num_heads: int = 6
-    """6 attention heads — matches NanoGPT-small n_head=6."""
     embed_dim: int = 384
-    """384-dim embeddings — matches NanoGPT-small n_embd=384."""
 
     # ----- Output -----
     out_dir: str = "out/cifar100_d6"
     wandb_run_name: str = "cifar100_d6"
-
 
 # Registry mapping preset names to config classes.  Add entries here to
 # expose additional presets to the ``config=<name>`` CLI argument.

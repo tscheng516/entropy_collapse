@@ -4,7 +4,7 @@ Data utilities for the ViT entropy-collapse experiments.
 Supports three dataset backends:
   * CIFAR-10   — auto-downloaded via torchvision (default for pilot tests).
   * CIFAR-100  — auto-downloaded via torchvision.
-  * ImageNet   — loaded from an ImageFolder directory tree (requires the
+    * ImageNet-1k — loaded from an ImageFolder directory tree (requires the
                  dataset to be present on disk in train/ and val/ sub-dirs).
     * ImageNet HF — loaded directly from Hugging Face ``imagenet-1k``.
 
@@ -86,7 +86,7 @@ def load_data(
 
     Args:
         dataset:     One of ``'cifar10'``, ``'cifar100'``, ``'imagenet'``,
-                 ``'imagenet_hf'``.
+             ``'imagenet1k'``, ``'imagenet_hf'``.
         data_dir:    Root directory for data storage / ImageFolder tree.
         img_size:    Spatial size fed to the model (images are resized).
         batch_size:  Images per batch.
@@ -124,7 +124,7 @@ def load_data(
             root=data_dir, train=False, download=True, transform=val_tf
         )
 
-    elif dataset_key == "imagenet":
+    elif dataset_key in ("imagenet", "imagenet1k"):
         train_path = os.path.join(data_dir, "train")
         val_path = os.path.join(data_dir, "val")
         if not os.path.isdir(train_path):
@@ -157,7 +157,7 @@ def load_data(
     else:
         raise ValueError(
             f"Unknown dataset '{dataset}'. "
-            "Supported values: 'cifar10', 'cifar100', 'imagenet', 'imagenet_hf'."
+            "Supported values: 'cifar10', 'cifar100', 'imagenet', 'imagenet1k', 'imagenet_hf'."
         )
 
     train_loader = DataLoader(

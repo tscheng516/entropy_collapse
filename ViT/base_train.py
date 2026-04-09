@@ -157,24 +157,43 @@ _maybe_set("z_score", known_args.z)
 _maybe_set("temp_shift_step", known_args.temp_shift)
 
 
-def _expected_num_classes(dataset_name: str) -> int | None:
+def _dataset_defaults(dataset_name: str) -> tuple[int, int] | None:
     ds = dataset_name.lower()
     if ds == "cifar10":
-        return 10
+        return 10, 32
     if ds == "cifar100":
-        return 100
-    if ds in ("imagenet", "imagenet_hf", "imagenet1k_hf", "hf_imagenet"):
-        return 1000
+        return 100, 32
+    if ds in (
+        "imagenet",
+        "imagenet1k",
+        "imagenet_hf",
+        "imagenet1k_hf",
+        "hf_imagenet",
+    ):
+        return 1000, 224
     return None
 
 
-expected_classes = _expected_num_classes(cfg.dataset)
-if cfg.init_from == "scratch" and expected_classes is not None and cfg.num_classes != expected_classes:
-    print(
-        f"[warn] dataset='{cfg.dataset}' typically uses num_classes={expected_classes}, "
-        f"but got {cfg.num_classes}; overriding to {expected_classes} for compatibility."
+dataset_defaults = _dataset_defaults(cfg.dataset)
+expected_classes: int | None = None
+if dataset_defaults is not None:
+    expected_classes, expected_img_size = dataset_defaults
+    if cfg.num_classes != expected_classes:
+        print(
+            f"[config] dataset='{cfg.dataset}' => overriding num_classes "
+            f"{cfg.num_classes} -> {expected_classes}"
+        )
+        cfg.num_classes = expected_classes
+    if cfg.img_size != expected_img_size:
+        print(
+            f"[config] dataset='{cfg.dataset}' => overriding img_size "
+            f"{cfg.img_size} -> {expected_img_size}"
+        )
+        cfg.img_size = expected_img_size
+elif cfg.num_classes is None or cfg.img_size is None:
+    raise ValueError(
+        f"Unknown dataset '{cfg.dataset}'. Please set num_classes and img_size explicitly."
     )
-    cfg.num_classes = expected_classes
 
 # ---------------------------------------------------------------------------
 # 2.  Reproducibility & device
