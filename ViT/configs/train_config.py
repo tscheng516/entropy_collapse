@@ -29,7 +29,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # I/O
     # ------------------------------------------------------------------ #
-    out_dir: str = "vit_out"
+    out_dir: str = "out"
     """Directory for checkpoints and logs."""
 
     eval_interval: int = 200
@@ -66,7 +66,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Data
     # ------------------------------------------------------------------ #
-    dataset: str = "cifar10"
+    dataset: str = "cifar100"
     """
     Dataset to use.  Supported values:
       'cifar10'   — CIFAR-10 (auto-downloaded, 10 classes, 32×32 → resized).
@@ -361,7 +361,7 @@ class ViTSmallCIFAR100Config(TrainConfig):
     """384-dim embeddings — matches NanoGPT-small n_embd=384."""
 
     # ----- Output -----
-    out_dir: str = "vit_out_cifar100_small"
+    out_dir: str = "out/cifar100_d6"
     wandb_run_name: str = "cifar100_d6"
 
 
