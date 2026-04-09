@@ -19,7 +19,7 @@ export CUDA_VISIBLE_DEVICES="$GPUS"
 
 # Activate conda
 eval "$(conda shell.bash hook)"
-conda activate "$CONDA_ENV"
+conda activate entropy-collapse-vit
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
