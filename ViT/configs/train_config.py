@@ -200,12 +200,6 @@ class TrainConfig:
     temp_shift_factor: float = 2.0
 
     # ------------------------------------------------------------------ #
-    # Spike detection / MAD analysis
-    # ------------------------------------------------------------------ #
-    z_score: float = 3.0
-    """MAD z-score multiplier for spike detection (used in spike plots)."""
-
-    # ------------------------------------------------------------------ #
     # Compute / device
     # ------------------------------------------------------------------ #
     device: str = "cuda"

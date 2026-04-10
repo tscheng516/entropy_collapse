@@ -28,7 +28,7 @@ class TrainConfig:
     checkpoint_interval: int = 500
     """Save a checkpoint every N iterations (in addition to best-loss saves)."""
 
-    always_save_checkpoint: bool = True
+    save_checkpoint: bool = True
     """If True, save a checkpoint after every eval, not just when val loss improves."""
 
     init_from: str = "scratch"
@@ -190,12 +190,6 @@ class TrainConfig:
     A value of 2.0 matches the typical intervention magnitude used in
     the entropy-collapse literature.
     """
-
-    # ------------------------------------------------------------------ #
-    # Spike detection / MAD analysis
-    # ------------------------------------------------------------------ #
-    z_score: float = 3.0
-    """MAD z-score multiplier for spike detection (used in spike plots)."""
 
     # ------------------------------------------------------------------ #
     # Compute / device

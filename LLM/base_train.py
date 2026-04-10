@@ -121,7 +121,6 @@ parser.add_argument("--optim", type=str, help="optimizer name (adamw or sgd)")
 parser.add_argument("--lr", type=float, help="peak learning rate")
 parser.add_argument("--max_it", type=int, help="number of training iterations")
 parser.add_argument("--wandb", type=str, help="enable wandb logging (true/false)")
-parser.add_argument("--z", type=float, help="MAD z-score for spike detection/plots")
 parser.add_argument(
     "--temp_shift",
     type=int,
@@ -149,7 +148,6 @@ _maybe_set("max_iters", known_args.max_it)
 if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
-_maybe_set("z_score", known_args.z)
 _maybe_set("temp_shift_step", known_args.temp_shift)
 
 # ---------------------------------------------------------------------------
@@ -485,7 +483,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         if cfg.wandb_log and (not use_ddp or rank == 0):
             wandb.log({"val/loss": val_loss}, step=iter_num)
 
-        if val_loss < best_val_loss or cfg.always_save_checkpoint:
+        if val_loss < best_val_loss or cfg.save_checkpoint:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 _save_checkpoint("best_ckpt")

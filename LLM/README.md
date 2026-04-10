@@ -71,7 +71,6 @@ python LLM/base_train.py data_dir=LLM/nanoGPT/data/shakespeare_char
 | `--max_it` | `max_iters` | `5000` |
 | `--cp` | `init_from` | `scratch` |
 | `--wandb` | `wandb_log` | `false` |
-| `--z` | `z_score` | `3` |
 
 ### Override flags from the command line
 

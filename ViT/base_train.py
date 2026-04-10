@@ -123,7 +123,6 @@ parser.add_argument("--optim", type=str)
 parser.add_argument("--lr", type=float)
 parser.add_argument("--max_it", type=int)
 parser.add_argument("--wandb", type=str)
-parser.add_argument("--z", type=float)
 parser.add_argument(
     "--temp_shift",
     type=int,
@@ -153,7 +152,6 @@ _maybe_set("max_iters", known_args.max_it)
 if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
-_maybe_set("z_score", known_args.z)
 _maybe_set("temp_shift_step", known_args.temp_shift)
 
 
@@ -577,7 +575,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 step=iter_num,
             )
 
-        if val_loss < best_val_loss or cfg.always_save_checkpoint:
+        if val_loss < best_val_loss or cfg.save_checkpoint:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 _save_checkpoint("best_ckpt")
