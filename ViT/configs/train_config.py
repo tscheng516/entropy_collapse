@@ -170,8 +170,9 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     hessian_freq: int = 10
     """
-    Compute all Hessian proxy metrics (λ_max, H_tilde, H_VV, H_GN, FD)
-    every N iterations.  Use a larger value to reduce overhead.
+    Compute all Hessian proxy metrics (λ_max, H_tilde, H_VV, H_GN, FD,
+    Diag_H, Fisher, BFGS, KFAC) every N iterations.  Use a larger value
+    to reduce overhead.
     """
 
     hessian_max_iter: int = 10
