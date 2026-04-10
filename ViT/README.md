@@ -115,7 +115,6 @@ python ViT/base_train.py \
 | `--optim` | `optimizer` | `adamw` |
 | `--max_it` | `max_iters` | `5000` |
 | `--wandb` | `wandb_log` | `false` |
-| `--z` | `z_score` | `3` |
 
 ---
 
