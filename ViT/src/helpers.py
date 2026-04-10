@@ -8,10 +8,12 @@ Hessian matrix; instead we use power iteration on Hessian-vector products
 Functions
 ---------
 get_VV_subspace_mask     — Binary mask selecting value-projection params.
-get_curvature_metrics    — All five sharpness proxies in one pass:
+get_curvature_metrics    — All nine sharpness proxies in one pass:
                              H (exact), H_tilde (preconditioned),
                              H_VV (value subspace), H_GN (Gauss-Newton),
-                             FD (finite-difference).
+                             FD (finite-difference), diag_h (diagonal
+                             Hessian), fisher (empirical Fisher), bfgs
+                             (L-BFGS curvature), kfac (K-FAC curvature).
 get_attention_entropy    — Per-layer Shannon entropy of cached attention.
 """
 
@@ -78,7 +80,7 @@ def get_curvature_metrics(
     compute_fd: bool = True,
 ) -> dict[str, float]:
     """
-    Compute five sharpness proxies for the current model state.
+    Compute nine sharpness proxies for the current model state.
 
     The proxies are (all estimated via power iteration unless stated):
 
@@ -93,6 +95,18 @@ def get_curvature_metrics(
     * ``fd``         — Finite-difference sharpness proxy
                        ‖Δg‖ / ‖Δw‖  between two consecutive steps.
                        Only computed when ``compute_fd=True``.
+    * ``diag_h``     — Trace of the diagonal Hessian, estimated via
+                       Hutchinson's stochastic trace estimator using
+                       Rademacher random vectors.
+    * ``fisher``     — Trace of the empirical Fisher information matrix,
+                       Tr(F) = ‖g‖², where g is the mini-batch gradient.
+    * ``bfgs``       — L-BFGS curvature estimate s^T y / s^T s from
+                       the most recent parameter / gradient displacement
+                       pair (finite-difference secant curvature).
+    * ``kfac``       — Kronecker-Factored Approximate Curvature (K-FAC)
+                       proxy: max Kronecker-factor eigenvalue product
+                       across all linear layers, estimated from cached
+                       input activations and output-gradient covariances.
 
     Args:
         model:      Model with a live computation graph.
@@ -107,7 +121,7 @@ def get_curvature_metrics(
 
     Returns:
         Dict with keys: ``hessian``, ``prec_h``, ``hessian_vv``,
-        ``gn``, ``fd``.
+        ``gn``, ``fd``, ``diag_h``, ``fisher``, ``bfgs``, ``kfac``.
     """
     grads = torch.autograd.grad(
         loss, model.parameters(), create_graph=True, retain_graph=True
@@ -283,12 +297,168 @@ def get_curvature_metrics(
         fd_norm = (dg.norm() / (dw.norm() + 1e-9)).item()
         optimizer.zero_grad()
 
+    # ------------------------------------------------------------------ #
+    # 6. Diagonal Hessian  (Hutchinson trace estimator)
+    #
+    # Tr(H) = E_z[z^T H z]  where z ~ Rademacher(±1).
+    # We average over a few random vectors for a cheap trace estimate.
+    # ------------------------------------------------------------------ #
+    diag_h_norm = 0.0
+    n_hutchinson = max(1, max_iter // 2)
+    try:
+        grads_diag = torch.autograd.grad(
+            loss, model.parameters(), create_graph=True, retain_graph=True
+        )
+        flat_grads_diag = torch.cat([g.reshape(-1) for g in grads_diag])
+        trace_sum = 0.0
+        for _ in range(n_hutchinson):
+            z = torch.randint(0, 2, flat_grads_diag.shape, device=flat_grads_diag.device).float() * 2.0 - 1.0
+            hz = torch.autograd.grad(
+                flat_grads_diag, model.parameters(), grad_outputs=z, retain_graph=True
+            )
+            flat_hz = torch.cat([g.contiguous().reshape(-1) for g in hz])
+            trace_sum += torch.dot(z, flat_hz).item()
+        diag_h_norm = trace_sum / n_hutchinson
+        del grads_diag, flat_grads_diag
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------ #
+    # 7. Empirical Fisher Information Matrix  Tr(F) = ‖g‖²
+    #
+    # The empirical Fisher is F = g g^T, so Tr(F) = ‖g‖².
+    # We compute the gradient on the current mini-batch.
+    # ------------------------------------------------------------------ #
+    fisher_norm = 0.0
+    try:
+        optimizer.zero_grad()
+        logits_f = model(X)
+        loss_fisher = F.cross_entropy(logits_f, Y)
+        loss_fisher.backward()
+        fisher_g = torch.cat([p.grad.reshape(-1) for p in model.parameters() if p.grad is not None])
+        fisher_norm = fisher_g.norm().square().item()
+        optimizer.zero_grad()
+        del fisher_g
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------ #
+    # 8. L-BFGS Curvature Estimate  s^T y / s^T s
+    #
+    # Secant-equation curvature: take one optimiser step and compute
+    # the curvature along the parameter displacement via the change
+    # in gradients: (y = g_{k+1} - g_k, s = w_{k+1} - w_k).
+    # ------------------------------------------------------------------ #
+    bfgs_norm = 0.0
+    try:
+        w0 = torch.cat([p.data.reshape(-1).clone() for p in model.parameters()])
+        optimizer.zero_grad()
+        logits_b0 = model(X)
+        loss_b0 = F.cross_entropy(logits_b0, Y)
+        loss_b0.backward()
+        g0 = torch.cat([p.grad.reshape(-1).clone() for p in model.parameters()])
+
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        w1 = torch.cat([p.data.reshape(-1) for p in model.parameters()])
+        optimizer.zero_grad()
+        logits_b1 = model(X)
+        loss_b1 = F.cross_entropy(logits_b1, Y)
+        loss_b1.backward()
+        g1 = torch.cat([p.grad.reshape(-1) for p in model.parameters()])
+
+        s = w1 - w0
+        y_bfgs = g1 - g0
+        sts = torch.dot(s, s)
+        bfgs_norm = (torch.dot(s, y_bfgs) / (sts + 1e-9)).item()
+        optimizer.zero_grad()
+        del w0, w1, g0, g1, s, y_bfgs
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------ #
+    # 9. K-FAC Proxy  (Kronecker-Factored Approximate Curvature)
+    #
+    # For each Linear layer we estimate two small covariance factors:
+    #   A = (1/B) a a^T   (input activations, registered via forward hook)
+    #   G = (1/B) δ δ^T   (output gradients, registered via backward hook)
+    # The K-FAC block curvature is  A ⊗ G  whose largest eigenvalue is
+    # λ_max(A) · λ_max(G).  We report the maximum across layers.
+    # ------------------------------------------------------------------ #
+    kfac_norm = 0.0
+    try:
+        a_cache: dict[str, torch.Tensor] = {}
+        g_cache: dict[str, torch.Tensor] = {}
+        handles = []
+
+        for name, mod in model.named_modules():
+            if isinstance(mod, torch.nn.Linear):
+                _name = name
+
+                def _fwd_hook(m, inp, out, _n=_name):
+                    a_cache[_n] = inp[0].detach()
+
+                def _bwd_hook(m, grad_in, grad_out, _n=_name):
+                    g_cache[_n] = grad_out[0].detach()
+
+                handles.append(mod.register_forward_hook(_fwd_hook))
+                handles.append(mod.register_full_backward_hook(_bwd_hook))
+
+        optimizer.zero_grad()
+        logits_kfac = model(X)
+        loss_kfac = F.cross_entropy(logits_kfac, Y)
+        loss_kfac.backward()
+        optimizer.zero_grad()
+
+        for h in handles:
+            h.remove()
+
+        max_kfac = 0.0
+        for name in a_cache:
+            if name not in g_cache:
+                continue
+            a = a_cache[name]  # (B, ..., d_in)
+            g = g_cache[name]  # (B, ..., d_out)
+            if a.ndim == 3:
+                a = a.reshape(-1, a.size(-1))
+            if g.ndim == 3:
+                g = g.reshape(-1, g.size(-1))
+            n_samples = a.size(0)
+
+            # Covariance factor eigenvalues via power iteration (cheap)
+            def _top_eig(M: torch.Tensor, iters: int = 5) -> float:
+                v = torch.randn(M.size(0), 1, device=M.device)
+                for _ in range(iters):
+                    v = M @ v
+                    v = v / (v.norm() + 1e-9)
+                return (v.t() @ M @ v).item()
+
+            A_cov = (a.t() @ a) / n_samples
+            G_cov = (g.t() @ g) / n_samples
+            lam_A = _top_eig(A_cov)
+            lam_G = _top_eig(G_cov)
+            max_kfac = max(max_kfac, lam_A * lam_G)
+
+        kfac_norm = max_kfac
+        del a_cache, g_cache
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
     return {
         "hessian": hessian_norm,
         "prec_h": prec_hessian_norm,
         "hessian_vv": hessian_vv_norm,
         "gn": gn_norm,
         "fd": fd_norm,
+        "diag_h": diag_h_norm,
+        "fisher": fisher_norm,
+        "bfgs": bfgs_norm,
+        "kfac": kfac_norm,
     }
 
 

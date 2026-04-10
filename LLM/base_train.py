@@ -5,7 +5,7 @@ This script trains a HookedGPT model from scratch (or from a checkpoint)
 while logging:
   * Train loss     — every iteration
   * Val loss       — every ``eval_interval`` iterations
-  * Hessian proxies (H, H_tilde, H_VV, H_GN, FD)
+  * Hessian proxies (H, H_tilde, H_VV, H_GN, FD, Diag_H, Fisher, BFGS, KFAC)
                    — every ``hessian_freq`` iterations
   * Per-layer attention entropy
                    — every ``entropy_freq`` iterations
@@ -445,6 +445,10 @@ history: dict[str, list] = {
     "hessian_vv": [],
     "gn": [],
     "fd": [],
+    "diag_h": [],
+    "fisher": [],
+    "bfgs": [],
+    "kfac": [],
     "entropy": [],
     "lr": [],
 }
@@ -499,6 +503,10 @@ for iter_num in range(iter_num, cfg.max_iters):
         "hessian_vv": 0.0,
         "gn": 0.0,
         "fd": 0.0,
+        "diag_h": 0.0,
+        "fisher": 0.0,
+        "bfgs": 0.0,
+        "kfac": 0.0,
     }
     if iter_num % cfg.hessian_freq == 0:
         model.train()
@@ -524,7 +532,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         finally:
             optimizer.zero_grad()
 
-    for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd"):
+    for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd", "diag_h", "fisher", "bfgs", "kfac"):
         history[k].append(curvature[k])
 
     # ---- Attention entropy ----
@@ -570,7 +578,12 @@ for iter_num in range(iter_num, cfg.max_iters):
         t0 = time.time()
         print(f"iter {iter_num:5d} | loss {loss_val:.4f} | lr {lr:.2e}  | dt {dt*1000:.1f}ms")
         if iter_num % cfg.hessian_freq == 0:
-            print(f"| H {curvature['hessian']:.1f} | H_VV {curvature['hessian_vv']:.1f} | GN {curvature['gn']:.1f}")
+            print(
+                f"| H {curvature['hessian']:.1f} | H_VV {curvature['hessian_vv']:.1f} "
+                f"| GN {curvature['gn']:.1f} | DiagH {curvature['diag_h']:.1f} "
+                f"| Fisher {curvature['fisher']:.1f} | BFGS {curvature['bfgs']:.1f} "
+                f"| KFAC {curvature['kfac']:.1f}"
+            )
         if cfg.wandb_log and (not use_ddp or rank == 0):
             log_dict: dict[str, float | int] = {
                 "train/loss": loss_val,
@@ -584,6 +597,10 @@ for iter_num in range(iter_num, cfg.max_iters):
                         "hessian/H_VV": curvature["hessian_vv"],
                         "hessian/GN": curvature["gn"],
                         "hessian/FD": curvature["fd"],
+                        "hessian/diag_H": curvature["diag_h"],
+                        "hessian/fisher": curvature["fisher"],
+                        "hessian/BFGS": curvature["bfgs"],
+                        "hessian/KFAC": curvature["kfac"],
                     }
                 )
             if iter_num % cfg.entropy_freq == 0:
@@ -629,6 +646,10 @@ if not use_ddp or rank == 0:
         ("hessian_vv", "H_VV", "hessian_vv"),
         ("prec_h", "Prec_H", "hessian_prec"),
         ("gn", "GN", "hessian_gn"),
+        ("diag_h", "Diag_H", "hessian_diag"),
+        ("fisher", "Fisher", "hessian_fisher"),
+        ("bfgs", "BFGS", "hessian_bfgs"),
+        ("kfac", "KFAC", "hessian_kfac"),
     ]
     for z in (1.5, 2):
         for key, label, suffix in spike_targets:

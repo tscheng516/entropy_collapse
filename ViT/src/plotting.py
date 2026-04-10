@@ -261,6 +261,10 @@ def print_correlations(history: dict, name: str, sample_every: int = 1) -> None:
     prec_h = _gk(history, "prec_h")
     gn = _gk(history, "gn")
     vv = _gk(history, "hessian_vv", "vv")
+    diag_h = _gk(history, "diag_h")
+    fisher = _gk(history, "fisher")
+    bfgs = _gk(history, "bfgs")
+    kfac = _gk(history, "kfac")
 
     def _corr(a, b, label):
         mask = np.isfinite(a) & np.isfinite(b)
@@ -272,9 +276,13 @@ def print_correlations(history: dict, name: str, sample_every: int = 1) -> None:
         print(f"  {label}: Spearman {sp:.4f} | Pearson {pe:.4f}")
 
     print(f"\n--- {name} Correlation Results ---")
-    _corr(h, prec_h, "H vs Prec_H ")
-    _corr(h, gn,     "H vs GN     ")
-    _corr(h, vv,     "H vs H_VV   ")
+    _corr(h, prec_h,  "H vs Prec_H ")
+    _corr(h, gn,      "H vs GN     ")
+    _corr(h, vv,      "H vs H_VV   ")
+    _corr(h, diag_h,  "H vs Diag_H ")
+    _corr(h, fisher,  "H vs Fisher ")
+    _corr(h, bfgs,    "H vs BFGS   ")
+    _corr(h, kfac,    "H vs KFAC   ")
 
 
 # ======================================================================
@@ -295,7 +303,8 @@ def plot_training_dynamics(
                     history dict with keys:
                     ``loss``, ``val_loss``, ``acc``, ``val_acc``,
                     ``hessian``, ``prec_h``, ``hessian_vv``,
-                    ``gn``, ``fd``, ``entropy``.
+                    ``gn``, ``fd``, ``diag_h``, ``fisher``, ``bfgs``,
+                    ``kfac``, ``entropy``.
                     ``entropy`` values are lists of per-layer floats.
         lrs:        Dict mapping optimizer name to the peak LR used
                     (kept for API compatibility).
@@ -306,7 +315,8 @@ def plot_training_dynamics(
     """
     opt_names = list(histories.keys())
     n_rows = len(opt_names)
-    fig, axs = plt.subplots(n_rows, 6, figsize=(36, 5 * n_rows))
+    # 10 columns: loss, Hessian proxies, entropy, + 7 scatter panels
+    fig, axs = plt.subplots(n_rows, 10, figsize=(60, 5 * n_rows))
     if n_rows == 1:
         axs = axs[np.newaxis, :]  # ensure 2-D indexing works
 
@@ -395,6 +405,44 @@ def plot_training_dynamics(
                 linewidth=2,
                 label=r"Value Subspace ($H_{VV}$)",
             )
+
+        diag_arr = _carry_forward_positive(_as1d("diag_h"))
+        if diag_arr.size:
+            ax.plot(
+                diag_arr,
+                color="teal",
+                linestyle="-.",
+                linewidth=2,
+                label="Diag Hessian",
+            )
+        fisher_arr = _carry_forward_positive(_as1d("fisher"))
+        if fisher_arr.size:
+            ax.plot(
+                fisher_arr,
+                color="olive",
+                linestyle="-.",
+                linewidth=2,
+                label="Empirical Fisher",
+            )
+        bfgs_arr = _carry_forward_positive(_as1d("bfgs"))
+        if bfgs_arr.size:
+            ax.plot(
+                bfgs_arr,
+                color="navy",
+                linestyle=":",
+                linewidth=2,
+                label="BFGS",
+            )
+        kfac_arr = _carry_forward_positive(_as1d("kfac"))
+        if kfac_arr.size:
+            ax.plot(
+                kfac_arr,
+                color="darkgreen",
+                linestyle=":",
+                linewidth=2,
+                label="K-FAC",
+            )
+
         ax.set_yscale("log")
         ax.set_title(f"{name} Hessian proxies")
         ax.set_xlabel("Iteration")
@@ -417,15 +465,23 @@ def plot_training_dynamics(
         axs[row, 2].set_ylabel("Entropy (nats)")
         axs[row, 2].legend(fontsize="small", ncol=2)
 
-        # --- Cols 3–5: three comparisons vs exact Hessian ---
+        # --- Cols 3–9: seven comparisons vs exact Hessian ---
         h_arr = _carry_forward_positive(_as1d("hessian"))
         prec_arr = _carry_forward_positive(_as1d("prec_h"))
         gn_arr = _carry_forward_positive(_as1d("gn"))
         vv_arr = _carry_forward_positive(_as1d("hessian_vv", alt="vv"))
+        diag_arr = _carry_forward_positive(_as1d("diag_h"))
+        fisher_arr = _carry_forward_positive(_as1d("fisher"))
+        bfgs_arr = _carry_forward_positive(_as1d("bfgs"))
+        kfac_arr = _carry_forward_positive(_as1d("kfac"))
 
         _comp_plot(axs[row, 3], h_arr, prec_arr, "H (exact)", "Precond H")
         _comp_plot(axs[row, 4], h_arr, gn_arr, "H (exact)", "Gauss-Newton")
         _comp_plot(axs[row, 5], h_arr, vv_arr, "H (exact)", "Value Subspace H")
+        _comp_plot(axs[row, 6], h_arr, diag_arr, "H (exact)", "Diag Hessian")
+        _comp_plot(axs[row, 7], h_arr, fisher_arr, "H (exact)", "Empirical Fisher")
+        _comp_plot(axs[row, 8], h_arr, bfgs_arr, "H (exact)", "BFGS")
+        _comp_plot(axs[row, 9], h_arr, kfac_arr, "H (exact)", "K-FAC")
 
     plt.tight_layout()
     if save_path:
