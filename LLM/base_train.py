@@ -485,7 +485,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         if cfg.wandb_log and (not use_ddp or rank == 0):
             wandb.log({"val/loss": val_loss}, step=iter_num)
 
-        if val_loss < best_val_loss or cfg.always_save_checkpoint:
+        if val_loss < best_val_loss or cfg.save_checkpoint:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 _save_checkpoint("best_ckpt")
