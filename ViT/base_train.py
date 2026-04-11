@@ -752,7 +752,11 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from src.plotting import plot_training_dynamics, plot_spike_cooccurrence  # noqa: E402
+    from src.plotting import plot_training_dynamics, plot_spike_cooccurrence, print_correlations, print_smooth_correlations  # noqa: E402
+
+    # --- Raw and smoothed correlation analysis ---
+    print_correlations(history, "Run")
+    print_smooth_correlations(history, "Run", lam=100.0)
 
     fig = plot_training_dynamics(
         histories={"Run": history},

@@ -19,10 +19,80 @@ get_attention_entropy    — Per-layer Shannon entropy of cached attention.
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.func import functional_call
 from torch.autograd import functional as autograd_functional
+
+
+# ======================================================================
+# Smooth log-trend extraction
+# ======================================================================
+
+
+def _second_difference_matrix(n: int) -> np.ndarray:
+    """
+    Build the (n-2)×n second-difference operator D such that
+    (D m)_i = m_i − 2 m_{i+1} + m_{i+2}.
+    """
+    if n < 3:
+        return np.zeros((0, n), dtype=np.float64)
+    D = np.zeros((n - 2, n), dtype=np.float64)
+    for i in range(n - 2):
+        D[i, i : i + 3] = [1.0, -2.0, 1.0]
+    return D
+
+
+def smooth_log_trend(
+    y: np.ndarray | list,
+    lam: float = 100.0,
+    eps: float = 1e-12,
+    use_abs: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Extract a smooth trend from a positive time-series by solving a
+    regularised least-squares problem in log-space:
+
+        min_m  ‖log(y) − m‖²  +  λ ‖D m‖²
+
+    where D is the second-difference operator (discrete second derivative).
+    The regularisation parameter *lam* controls the smoothness of the trend
+    (higher → smoother).
+
+    This is the same technique used in the LLM notebook
+    (``NanoGPT_shakespear.ipynb``) to compare curvature-proxy dynamics
+    without relying solely on spike-detection.
+
+    Args:
+        y:       1-D array of (ideally positive) measurements.
+        lam:     Smoothing strength (λ).  100 is a good default.
+        eps:     Floor value to avoid log(0).
+        use_abs: If True, take |y| before logging (useful when the
+                 estimator is conceptually non-negative but may produce
+                 small negative values due to numerical noise).
+
+    Returns:
+        trend_raw:  exp(m) — smooth trend on the original scale.
+        trend_log:  m — smooth trend in log-space.
+        log_y:      log(y_safe) — the raw log-series.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    y_safe = np.abs(y) + eps if use_abs else np.maximum(y, eps)
+
+    log_y = np.log(y_safe)
+    n = len(log_y)
+
+    if n < 3:
+        return y_safe.copy(), log_y.copy(), log_y.copy()
+
+    D = _second_difference_matrix(n)
+    A = np.eye(n, dtype=np.float64) + lam * (D.T @ D)
+
+    trend_log = np.linalg.solve(A, log_y)
+    trend_raw = np.exp(trend_log)
+
+    return trend_raw, trend_log, log_y
 
 
 # ======================================================================

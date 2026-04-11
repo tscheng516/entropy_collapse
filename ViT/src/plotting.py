@@ -25,6 +25,8 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import median_filter
 from scipy import stats as sp_stats
 
+from src.helpers import smooth_log_trend
+
 # Consistency factor: sigma ≈ 1.4826 × MAD for a normal distribution.
 # Reference: Rousseeuw & Croux (1993), JASA 88(424):1273-1283.
 _MAD_TO_STD = 1.4826
@@ -285,6 +287,88 @@ def print_correlations(history: dict, name: str, sample_every: int = 1) -> None:
     _corr(h, kfac,    "H vs KFAC   ")
 
 
+def print_smooth_correlations(
+    history: dict,
+    name: str,
+    lam: float = 100.0,
+    sample_every: int = 1,
+) -> None:
+    """
+    Print Spearman & Pearson correlations between *smoothed* curvature
+    proxy time-series, as well as smoothed-proxy-vs-entropy correlations.
+
+    Uses :func:`smooth_log_trend` (Whittaker–Henderson smoother in
+    log-space) to strip high-frequency noise before computing
+    correlations — the same technique used in the LLM notebook.
+
+    Args:
+        history:      Training history dict (same format as
+                      :func:`print_correlations`).
+        name:         Experiment label for the printed header.
+        lam:          Smoothing strength passed to ``smooth_log_trend``.
+        sample_every: Sub-sampling stride.
+    """
+
+    def _gk(d, *keys):
+        for k in keys:
+            if k in d:
+                return np.array(d[k][::sample_every])
+        return np.asarray([])
+
+    def _smooth(arr):
+        if arr.size < 3:
+            return arr
+        trend, _, _ = smooth_log_trend(arr, lam=lam, use_abs=True)
+        return trend
+
+    h = _smooth(_gk(history, "hessian"))
+    prec_h = _smooth(_gk(history, "prec_h"))
+    gn = _smooth(_gk(history, "gn"))
+    vv = _smooth(_gk(history, "hessian_vv", "vv"))
+    diag_h = _smooth(_gk(history, "diag_h"))
+    fisher = _smooth(_gk(history, "fisher"))
+    bfgs = _smooth(_gk(history, "bfgs"))
+    kfac = _smooth(_gk(history, "kfac"))
+
+    # Entropy arrays (per-layer → first-layer and average)
+    raw_ent = history.get("entropy", [])
+    if raw_ent and len(raw_ent) > 0:
+        ent_arr = np.array(raw_ent[::sample_every])
+        if ent_arr.ndim == 2 and ent_arr.shape[1] > 0:
+            ent_first = ent_arr[:, 0]
+            ent_avg = ent_arr.mean(axis=1)
+        else:
+            ent_first = ent_avg = np.asarray([])
+    else:
+        ent_first = ent_avg = np.asarray([])
+
+    def _corr(a, b, label):
+        mask = np.isfinite(a) & np.isfinite(b)
+        if mask.sum() < 3:
+            print(f"  {label}: insufficient data")
+            return
+        sp, _ = sp_stats.spearmanr(a[mask], b[mask])
+        pe, _ = sp_stats.pearsonr(a[mask], b[mask])
+        print(f"  {label}: Spearman {sp:.4f} | Pearson {pe:.4f}")
+
+    print(f"\n--- {name} Smoothed Correlation Results (λ={lam}) ---")
+    _corr(h, prec_h, "H vs Prec_H ")
+    _corr(h, gn,     "H vs GN     ")
+    _corr(h, vv,     "H vs H_VV   ")
+    _corr(h, diag_h, "H vs Diag_H ")
+    _corr(h, fisher, "H vs Fisher ")
+    _corr(h, bfgs,   "H vs BFGS   ")
+    _corr(h, kfac,   "H vs KFAC   ")
+
+    if ent_first.size >= 3 and h.size >= 3:
+        n = min(len(h), len(ent_first))
+        print(f"\n--- {name} Smoothed Proxy vs Entropy (λ={lam}) ---")
+        _corr(h[:n],     ent_first[:n], "H vs Entropy(L0) ")
+        _corr(h[:n],     ent_avg[:n],   "H vs Entropy(avg)")
+        _corr(vv[:n],    ent_first[:n], "H_VV vs Entropy  ")
+        _corr(prec_h[:n], ent_first[:n], "Prec_H vs Entropy")
+
+
 # ======================================================================
 # Training dynamics — multi-panel grid
 # ======================================================================
@@ -377,6 +461,7 @@ def plot_training_dynamics(
         ax = axs[row, 1]
         h_arr = _carry_forward_positive(_as1d("hessian"))
         ax.plot(h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
+        prec_arr = np.asarray([])
         if "adam" in name.lower():
             prec_arr = _carry_forward_positive(_as1d("prec_h"))
             if prec_arr.size:
@@ -448,6 +533,32 @@ def plot_training_dynamics(
         ax.set_xlabel("Iteration")
         ax.set_ylabel("λ_max estimate")
         ax.legend(fontsize="small")
+
+        # --- Smoothed trend overlays (Whittaker–Henderson in log-space) ---
+        _smooth_lam = 100.0
+        _smooth_alpha = 0.45
+        _smooth_lw = 5
+
+        def _overlay_smooth(ax_s, arr, color):
+            if arr.size >= 3:
+                trend, _, _ = smooth_log_trend(arr, lam=_smooth_lam, use_abs=True)
+                ax_s.plot(trend, color=color, linewidth=_smooth_lw, alpha=_smooth_alpha)
+
+        _overlay_smooth(ax, h_arr, "red")
+        if "adam" in name.lower() and prec_arr.size:
+            _overlay_smooth(ax, prec_arr, "purple")
+        if gn_arr.size:
+            _overlay_smooth(ax, gn_arr, "brown")
+        if vv_arr.size:
+            _overlay_smooth(ax, vv_arr, "magenta")
+        if diag_arr.size:
+            _overlay_smooth(ax, diag_arr, "teal")
+        if fisher_arr.size:
+            _overlay_smooth(ax, fisher_arr, "olive")
+        if bfgs_arr.size:
+            _overlay_smooth(ax, bfgs_arr, "navy")
+        if kfac_arr.size:
+            _overlay_smooth(ax, kfac_arr, "darkgreen")
 
         # --- Col 2: per-layer attention entropy ---
         entropies = _carry_forward_positive_2d(np.array(h.get("entropy", [])))  # (T, n_layer)
