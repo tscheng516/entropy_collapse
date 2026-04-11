@@ -15,11 +15,21 @@ so that pretrained timm weights can be used directly.
 from __future__ import annotations
 
 import os
+import warnings
 
 import torch
 from torch.utils.data import DataLoader, Dataset
 import torchvision
 import torchvision.transforms as T
+from PIL import ImageFile
+
+# Allow PIL to load truncated / partially corrupt images instead of stalling.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# Suppress noisy PIL warnings about known ImageNet-1k EXIF issues.
+warnings.filterwarnings("ignore", message="Corrupt EXIF data")
+warnings.filterwarnings("ignore", message="Truncated File Read")
+warnings.filterwarnings("ignore", message="Metadata Warning, tag 274")
 
 
 # ImageNet channel statistics (mean / std per channel).
