@@ -178,7 +178,7 @@ def load_data(
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
-        prefetch_factor=4 if num_workers > 0 else None,
+        prefetch_factor=8 if num_workers > 0 else None,
     )
 
     train_loader = DataLoader(
