@@ -76,7 +76,7 @@ class TrainConfig:
     """
 
     batch_size: int = 64
-    num_workers: int = 4
+    num_workers: int = 8
 
     # ------------------------------------------------------------------ #
     # Model
@@ -381,6 +381,7 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
     dataset: str = "imagenet1k"
     num_classes: int = 1000
     batch_size: int = 256
+    num_workers: int = 8
 
     # ----- Architecture -----
     model_name: str = "vit_base_patch16_224"

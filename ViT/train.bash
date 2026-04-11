@@ -17,6 +17,12 @@ NPROC=${#GPU_ARRAY[@]}
 
 export CUDA_VISIBLE_DEVICES="$GPUS"
 
+# Prevent DataLoader workers from spawning redundant OpenMP/MKL threads.
+# Each GPU process already has num_workers I/O processes; intra-op parallelism
+# within workers only wastes cycles via context-switching.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
 # Activate conda
 eval "$(conda shell.bash hook)"
 conda activate entropy-collapse-vit

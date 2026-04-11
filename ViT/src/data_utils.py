@@ -77,7 +77,7 @@ def load_data(
     data_dir: str,
     img_size: int,
     batch_size: int,
-    num_workers: int = 4,
+    num_workers: int = 8,
     pin_memory: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
     """
@@ -168,6 +168,7 @@ def load_data(
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
     train_loader = DataLoader(
