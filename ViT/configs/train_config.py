@@ -380,7 +380,7 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
     # ----- Data -----
     dataset: str = "imagenet1k"
     num_classes: int = 1000
-    batch_size: int = 128
+    batch_size: int = 256
 
     # ----- Image / patch geometry -----
     img_size: int = 224
@@ -397,7 +397,7 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
     use_scaled_init: bool = True
 
     # ----- Optimiser -----
-    learning_rate: float = 3e-3
+    learning_rate: float = 1e-3
     weight_decay: float = 0.05
     beta1: float = 0.9
     beta2: float = 0.999
