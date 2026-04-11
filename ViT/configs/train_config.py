@@ -38,7 +38,7 @@ class TrainConfig:
     out_dir: str = "out"
     eval_interval: int = 500
     log_interval: int = 1
-    checkpoint_interval: int = 5000
+    checkpoint_interval: int = -1
     save_checkpoint: bool = True
     init_from: str = "scratch"
     """
