@@ -39,7 +39,7 @@ class TrainConfig:
     eval_interval: int = 500
     log_interval: int = 1
     checkpoint_interval: int = -1
-    save_checkpoint: bool = True
+    save_checkpoint: bool = False
     init_from: str = "scratch"
     """
     'scratch'  — initialise a fresh model with custom init_std weights.
