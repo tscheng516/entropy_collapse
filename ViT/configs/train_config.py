@@ -121,6 +121,7 @@ class TrainConfig:
     init_std: float = 0.002
     use_scaled_init: bool = True
     qk_norm: bool = False
+    label_smoothing: float = 0.0
 
     # ------------------------------------------------------------------ #
     # Optimiser
@@ -346,10 +347,78 @@ class ViTBaseImageNet1kConfig(TrainConfig):
     wandb_run_name: str = "imagenet1k_vitb16"
 
 
+@dataclass
+class ViTCurrentImageNet1kConfig(TrainConfig):
+    """
+    ViT-Base/16 trained from scratch on ImageNet-1k with a modern recipe.
+
+    This config fixes the flat-loss issue of ``ViTBaseImageNet1kConfig`` by
+    adopting DeiT-style (Touvron et al., 2021) training defaults:
+
+      * **init_std = 0.02** — the standard ViT initialisation scale.  The
+        previous ``0.002`` trapped the model in a near-zero dead zone where
+        all logits (and therefore softmax outputs) are near-uniform, causing
+        the loss to stay flat at ≈ ln(1000) ≈ 6.908.
+      * **label_smoothing = 0.1** — softens hard one-hot targets, improving
+        generalisation and stabilising early training.
+      * **Longer training schedule** — ``max_iters = 50000`` with a 2000-step
+        warm-up gives the optimiser enough runway to converge.
+
+    Architecture (standard ViT-Base):
+      - 12 transformer layers, 12 heads, 768-dim embeddings
+      - patch_size = 16 on 224×224 images → (224/16)² = 196 patches
+
+    Usage::
+
+        python base_train.py config=imagenet1k_current
+
+    Individual fields can still be overridden::
+
+        python base_train.py config=imagenet1k_current --lr 5e-4 max_iters=100000
+    """
+
+    # ----- Data -----
+    dataset: str = "imagenet1k"
+    num_classes: int = 1000
+    batch_size: int = 128
+
+    # ----- Image / patch geometry -----
+    img_size: int = 224
+    patch_size: int = 16
+
+    # ----- Architecture (ViT-Base) -----
+    model_name: str = "vit_base_patch16_224"
+    depth: int = 12
+    num_heads: int = 12
+    embed_dim: int = 768
+
+    # ----- Initialisation -----
+    init_std: float = 0.02
+    use_scaled_init: bool = True
+
+    # ----- Optimiser -----
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.05
+    beta2: float = 0.999
+    eps: float = 1e-8
+    label_smoothing: float = 0.1
+
+    # ----- LR schedule -----
+    max_iters: int = 50000
+    warmup_iters: int = 2000
+    lr_decay_iters: int = 50000
+    min_lr: float = 1e-5
+
+    # ----- Output -----
+    out_dir: str = "out/imagenet1k_current"
+    wandb_run_name: str = "imagenet1k_current"
+
+
 # Registry mapping preset names to config classes.  Add entries here to
 # expose additional presets to the ``config=<name>`` CLI argument.
 CONFIGS: dict[str, type[TrainConfig]] = {
     "default": TrainConfig,
     "cifar100_small": ViTSmallCIFAR100Config,
     "imagenet1k_base": ViTBaseImageNet1kConfig,
+    "imagenet1k_current": ViTCurrentImageNet1kConfig,
 }
