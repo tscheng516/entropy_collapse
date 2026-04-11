@@ -486,7 +486,7 @@ def estimate_val_metrics(n_batches: int = 10) -> tuple[float, float]:
         xv, yv = xv.to(device), yv.to(device)
         with ctx:
             logits = _raw_model(xv)
-        lv = F.cross_entropy(logits, yv)
+        lv = F.cross_entropy(logits, yv, label_smoothing=cfg.label_smoothing)
         losses.append(lv.item())
         correct += (logits.argmax(dim=-1) == yv).sum().item()
         total += yv.size(0)
@@ -607,7 +607,7 @@ for iter_num in range(iter_num, cfg.max_iters):
             enable_flash=False, enable_mem_efficient=False, enable_math=True
         ) if device != "cpu" else nullcontext():
             logits_h = _raw_model(X)
-            loss_for_hess = F.cross_entropy(logits_h, Y)
+            loss_for_hess = F.cross_entropy(logits_h, Y, label_smoothing=cfg.label_smoothing)
 
         try:
             curvature = get_curvature_metrics(
@@ -634,7 +634,7 @@ for iter_num in range(iter_num, cfg.max_iters):
     optimizer.zero_grad(set_to_none=True)
     with ctx:
         logits = _raw_model(X)
-        loss = F.cross_entropy(logits, Y)
+        loss = F.cross_entropy(logits, Y, label_smoothing=cfg.label_smoothing)
 
         if iter_num % cfg.entropy_freq == 0:
             with torch.no_grad():
