@@ -236,62 +236,80 @@ class TrainConfig:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ViTSmallCIFAR100Config(TrainConfig):
+class ViTBaseCIFAR100Config(TrainConfig):
     """
-    ViT configuration comparable to the NanoGPT-small (d=6) LLM experiment,
-    adapted for CIFAR-100.
+    ViT-B/16 trained from scratch on CIFAR-100.
 
-    Architecture parity with NanoGPT-small (LLM/configs/train_config.py):
+    Uses native 32×32 CIFAR resolution with ``patch_size=4`` so the patch
+    embedding produces a (32/4)² = **64-patch** sequence — the standard
+    approach for ViTs on CIFAR (Lee et al., "ViT for Small-Size Datasets",
+    2021; Chen et al., 2022).  No artificial up-scaling is needed.
 
-    +--------------+-----------------------+------------------+
-    | Dimension    | NanoGPT-small         | This ViT config  |
-    +--------------+-----------------------+------------------+
-    | Depth        | n_layer = 6           | depth = 6        |
-    | Heads        | n_head  = 6           | num_heads = 6    |
-    | Hidden dim   | n_embd  = 384         | embed_dim = 384  |
-    | Seq length   | block_size = 64 tok   | 64 patches *     |
-    +--------------+-----------------------+------------------+
+    Architecture (ViT-Base trunk, adapted patch embedding):
+      - 12 transformer layers, 12 heads, 768-dim embeddings
+      - patch_size = 4 on 32×32 images → (32/4)² = 64 patches
 
-    * patch_size=4 on 32×32 CIFAR images → (32/4)² = 64 patches, exactly
-      matching NanoGPT-small's context length of 64 tokens.  Both models
-      therefore process sequences of length 64 per sample.
+    Training recipe follows DeiT (Touvron et al., 2021) and "How to Train
+    Your ViT?" (Steiner et al., 2022) defaults for from-scratch training
+    on a 100-class dataset:
 
-    Both architectures use:
-      - 6 transformer layers
-      - 6 attention heads
-      - 384-dimensional embeddings
-      - MLP expansion ratio of 4× (≈ 1536 hidden units)
-      - No QK normalisation (``qk_norm=False``)
-      - Small-std weight initialisation with residual-depth scaling
+      * **init_std = 0.02** — standard ViT truncated-normal initialisation.
+        The base-class default ``0.002`` is too small and traps logits in a
+        near-uniform dead zone.
+      * **AdamW** with lr = 1e-3, weight_decay = 0.05, β₂ = 0.999, ε = 1e-8.
+      * **Cosine LR schedule** with a 2 000-step linear warm-up, decaying to
+        1e-5 over 50 000 iterations.
+      * **Label smoothing = 0.1** — softens one-hot targets, stabilises early
+        training and improves generalisation.
 
-    This yields roughly comparable total parameter counts (~10.7 M each)
-    and makes cross-modal comparisons of entropy / Hessian dynamics
-    straightforward.
+    50 000 iterations × batch 128 ≈ 128 epochs over 50 k CIFAR-100 images,
+    which is in the typical 100-300 epoch range reported for ViT-B on small
+    datasets.
 
     Usage::
 
-        python base_train.py config=cifar100_small
+        python base_train.py config=cifar100_base
 
     Individual fields can still be overridden via the usual CLI syntax::
 
-        python base_train.py config=cifar100_small --lr 5e-4 max_iters=2000
+        python base_train.py config=cifar100_base --lr 5e-4 max_iters=100000
     """
 
     # ----- Data -----
     dataset: str = "cifar100"
     num_classes: int = 100
+    batch_size: int = 128
+
     # ----- Image / patch geometry -----
     img_size: int = 32
     patch_size: int = 4
-    # ----- Architecture (NanoGPT-small parity) -----
-    model_name: str = "vit_small_patch16_224"
-    depth: int = 6
-    num_heads: int = 6
-    embed_dim: int = 384
+
+    # ----- Architecture (ViT-Base trunk) -----
+    model_name: str = "vit_base_patch16_224"
+    depth: int = 12
+    num_heads: int = 12
+    embed_dim: int = 768
+
+    # ----- Initialisation -----
+    init_std: float = 0.02
+    use_scaled_init: bool = True
+    label_smoothing: float = 0.1
+
+    # ----- Optimiser -----
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.05
+    beta2: float = 0.999
+    eps: float = 1e-8
+
+    # ----- LR schedule -----
+    max_iters: int = 50000
+    warmup_iters: int = 2000
+    lr_decay_iters: int = 50000
+    min_lr: float = 1e-5
 
     # ----- Output -----
-    out_dir: str = "out/cifar100_d6"
-    wandb_run_name: str = "cifar100_d6"
+    out_dir: str = "out/cifar100_vitb16"
+    wandb_run_name: str = "cifar100_vitb16"
 
 
 @dataclass
@@ -412,7 +430,7 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
 # expose additional presets to the ``config=<name>`` CLI argument.
 CONFIGS: dict[str, type[TrainConfig]] = {
     "default": TrainConfig,
-    "cifar100_small": ViTSmallCIFAR100Config,
+    "cifar100_base": ViTBaseCIFAR100Config,
     "imagenet1k_base": ViTBaseImageNet1kConfig,
     "imagenet1k_current": ViTCurrentImageNet1kConfig,
 }
