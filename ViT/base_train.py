@@ -606,7 +606,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 _save_checkpoint("best_ckpt")
             _save_checkpoint("ckpt")
 
-    if iter_num % cfg.checkpoint_interval == 0 and iter_num > 0:
+    if cfg.checkpoint_interval > 0 and iter_num % cfg.checkpoint_interval == 0 and iter_num > 0:
         _save_checkpoint(f"ckpt_iter{iter_num:06d}")
 
     # ---- Hessian metrics ----

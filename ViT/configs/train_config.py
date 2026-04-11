@@ -36,7 +36,7 @@ class TrainConfig:
     # I/O
     # ------------------------------------------------------------------ #
     out_dir: str = "out"
-    eval_interval: int = 200
+    eval_interval: int = 500
     log_interval: int = 1
     checkpoint_interval: int = 5000
     save_checkpoint: bool = True
@@ -169,7 +169,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_freq: int = 100
+    hessian_freq: int = 500
     """
     Compute all Hessian proxy metrics (λ_max, H_tilde, H_VV, H_GN, FD,
     Diag_H, Fisher, BFGS, KFAC) every N iterations.  Use a larger value
@@ -189,7 +189,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_freq: int = 100
+    entropy_freq: int = 500
     """
     Compute per-layer attention entropy every N iterations.
     Logged both to stdout and to wandb as entropy/layer_<k>.
@@ -382,15 +382,8 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
     num_classes: int = 1000
     batch_size: int = 256
 
-    # ----- Image / patch geometry -----
-    img_size: int = 224
-    patch_size: int = 16
-
-    # ----- Architecture (ViT-Base) -----
+    # ----- Architecture -----
     model_name: str = "vit_base_patch16_224"
-    depth: int = 12
-    num_heads: int = 12
-    embed_dim: int = 768
 
     # ----- Initialisation -----
     init_std: float = 0.02
@@ -399,14 +392,13 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
     # ----- Optimiser -----
     learning_rate: float = 1e-3
     weight_decay: float = 0.05
-    beta1: float = 0.9
-    beta2: float = 0.999
+    beta2: float = 0.999          # base default 0.95 is for GPT; ViT needs 0.999
     eps: float = 1e-8
     label_smoothing: float = 0.1
 
     # ----- LR schedule -----
     max_iters: int = 50000
-    warmup_iters: int = 2000
+    warmup_iters: int = 5000
     lr_decay_iters: int = 50000
     min_lr: float = 1e-5
 
