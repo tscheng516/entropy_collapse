@@ -164,21 +164,25 @@ def load_data(
             "Supported values: 'cifar10', 'cifar100', 'imagenet', 'imagenet1k', 'imagenet_hf'."
         )
 
+    _loader_kwargs = dict(
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
+    )
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
         drop_last=True,
+        **_loader_kwargs,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
         drop_last=False,
+        **_loader_kwargs,
     )
     return train_loader, val_loader
 

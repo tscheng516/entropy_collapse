@@ -107,8 +107,9 @@ def _patched_attn_forward(
 
     attn = attn.softmax(dim=-1)
 
-    # Cache for entropy computation — detach so it doesn't pollute grads.
-    self.last_att = attn.detach()
+    # Cache for entropy computation — only when explicitly requested.
+    if getattr(self, "_cache_attn", False):
+        self.last_att = attn.detach()
 
     attn = self.attn_drop(attn)
     x = (attn @ v).transpose(1, 2).reshape(B, N, attn_dim)

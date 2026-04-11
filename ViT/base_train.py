@@ -652,15 +652,24 @@ for iter_num in range(iter_num, cfg.max_iters):
 
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
+    _need_entropy = iter_num % cfg.entropy_freq == 0
+
+    # Enable attention caching only when entropy will be read.
+    if _need_entropy:
+        for blk in _raw_model.blocks:
+            blk.attn._cache_attn = True
 
     optimizer.zero_grad(set_to_none=True)
     with ctx:
         logits = _raw_model(X)
         loss = F.cross_entropy(logits, Y, label_smoothing=cfg.label_smoothing)
 
-        if iter_num % cfg.entropy_freq == 0:
+        if _need_entropy:
             with torch.no_grad():
                 layer_entropies = get_attention_entropy(_raw_model)
+            for blk in _raw_model.blocks:
+                blk.attn._cache_attn = False
+                blk.attn.last_att = None  # free ~684 MB immediately
 
     loss.backward()
     if cfg.grad_clip > 0.0:
