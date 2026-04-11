@@ -135,12 +135,9 @@ def load_data(
             train_ds = torchvision.datasets.ImageFolder(train_path, transform=train_tf)
             val_ds = torchvision.datasets.ImageFolder(val_path, transform=val_tf)
         else:
-            # Download via HF and cache locally; subsequent runs reuse the cache.
+            # Load via HF; subsequent runs reuse the cache.
             if int(os.environ.get("RANK", "0")) == 0:
-                print(
-                    f"[data] local ImageNet not found at '{data_dir}', "
-                    "downloading from Hugging Face (cached for future runs) …"
-                )
+                print(f"[data] loading ImageNet via Hugging Face (cache: '{data_dir}')")
             try:
                 from datasets import load_dataset
             except ImportError as exc:

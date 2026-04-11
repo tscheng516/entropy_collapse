@@ -111,6 +111,8 @@ cfg = _config_cls()
 for arg in sys.argv[1:]:
     if "=" in arg:
         key, val = arg.split("=", 1)
+        if key == "config":
+            continue  # already handled above
         if hasattr(cfg, key):
             try:
                 setattr(cfg, key, ast.literal_eval(val))
@@ -598,7 +600,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 step=iter_num,
             )
 
-        if val_loss < best_val_loss or cfg.save_checkpoint:
+        if (val_loss < best_val_loss or cfg.save_checkpoint) and iter_num > 0:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 _save_checkpoint("best_ckpt")
