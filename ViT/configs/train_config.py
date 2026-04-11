@@ -38,7 +38,7 @@ class TrainConfig:
     out_dir: str = "out"
     eval_interval: int = 200
     log_interval: int = 1
-    checkpoint_interval: int = 500
+    checkpoint_interval: int = 5000
     save_checkpoint: bool = True
     init_from: str = "scratch"
     """
@@ -169,7 +169,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_freq: int = 10
+    hessian_freq: int = 100
     """
     Compute all Hessian proxy metrics (λ_max, H_tilde, H_VV, H_GN, FD,
     Diag_H, Fisher, BFGS, KFAC) every N iterations.  Use a larger value
@@ -179,7 +179,7 @@ class TrainConfig:
     hessian_max_iter: int = 10
     """Number of power-iteration steps for λ_max estimation."""
 
-    compute_fd: bool = True
+    compute_fd: bool = False
     """
     Whether to compute the Finite-Difference sharpness proxy.
     This requires an extra forward/backward pass and can be disabled
@@ -189,7 +189,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_freq: int = 10
+    entropy_freq: int = 100
     """
     Compute per-layer attention entropy every N iterations.
     Logged both to stdout and to wandb as entropy/layer_<k>.
@@ -397,8 +397,9 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
     use_scaled_init: bool = True
 
     # ----- Optimiser -----
-    learning_rate: float = 1e-3
+    learning_rate: float = 3e-3
     weight_decay: float = 0.05
+    beta1: float = 0.9
     beta2: float = 0.999
     eps: float = 1e-8
     label_smoothing: float = 0.1

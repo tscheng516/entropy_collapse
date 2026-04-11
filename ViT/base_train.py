@@ -67,6 +67,9 @@ import torch
 import torch.nn.functional as F
 import torch.distributed as dist
 
+# True on rank-0 (or single-GPU); works before dist.init_process_group.
+_is_master = int(os.environ.get("RANK", "0")) == 0
+
 # ---------------------------------------------------------------------------
 # 0.  Path setup — add ViT/ so ``configs`` and ``src`` sub-packages resolve.
 # ---------------------------------------------------------------------------
@@ -92,7 +95,8 @@ for _arg in sys.argv[1:]:
         _preset = _arg.split("=", 1)[1].strip()
         if _preset in CONFIGS:
             _config_cls = CONFIGS[_preset]
-            print(f"[config] using preset '{_preset}' ({_config_cls.__name__})")
+            if _is_master:
+                print(f"[config] using preset '{_preset}' ({_config_cls.__name__})")
         else:
             raise ValueError(
                 f"Unknown config preset '{_preset}'. "
@@ -113,7 +117,8 @@ for arg in sys.argv[1:]:
             except (ValueError, SyntaxError):
                 setattr(cfg, key, val)
         else:
-            print(f"[warn] unknown config key '{key}', ignoring.")
+            if _is_master:
+                print(f"[warn] unknown config key '{key}', ignoring.")
 
 import argparse
 
@@ -142,7 +147,8 @@ def _maybe_set(attr, val, conv=lambda x: x):
     try:
         setattr(cfg, attr, conv(val))
     except Exception:
-        print(f"[warn] failed to set cfg.{attr} from CLI value {val}")
+        if _is_master:
+            print(f"[warn] failed to set cfg.{attr} from CLI value {val}")
 
 
 _maybe_set("init_from", known_args.cp)
@@ -177,16 +183,18 @@ expected_classes: int | None = None
 if dataset_defaults is not None:
     expected_classes, expected_img_size = dataset_defaults
     if cfg.num_classes != expected_classes:
-        print(
-            f"[config] dataset='{cfg.dataset}' => overriding num_classes "
-            f"{cfg.num_classes} -> {expected_classes}"
-        )
+        if _is_master:
+            print(
+                f"[config] dataset='{cfg.dataset}' => overriding num_classes "
+                f"{cfg.num_classes} -> {expected_classes}"
+            )
         cfg.num_classes = expected_classes
     if cfg.img_size != expected_img_size:
-        print(
-            f"[config] dataset='{cfg.dataset}' => overriding img_size "
-            f"{cfg.img_size} -> {expected_img_size}"
-        )
+        if _is_master:
+            print(
+                f"[config] dataset='{cfg.dataset}' => overriding img_size "
+                f"{cfg.img_size} -> {expected_img_size}"
+            )
         cfg.img_size = expected_img_size
 elif cfg.num_classes is None or cfg.img_size is None:
     raise ValueError(
@@ -269,11 +277,12 @@ train_loader, val_loader = load_data(
 )
 
 train_iter = infinite_loader(train_loader)
-print(
-    f"[data] dataset={cfg.dataset}  "
-    f"train_batches={len(train_loader)}  "
-    f"val_batches={len(val_loader)}"
-)
+if _is_master:
+    print(
+        f"[data] dataset={cfg.dataset}  "
+        f"train_batches={len(train_loader)}  "
+        f"val_batches={len(val_loader)}"
+    )
 
 # ---------------------------------------------------------------------------
 # 4.  Model
@@ -293,7 +302,8 @@ def _strip_compile_prefix(state_dict: dict) -> dict:
 
 
 if cfg.init_from == "scratch":
-    print(f"[model] building {cfg.model_name} from scratch …")
+    if _is_master:
+        print(f"[model] building {cfg.model_name} from scratch …")
     model = build_hooked_vit(
         model_name=cfg.model_name,
         num_classes=cfg.num_classes,
@@ -311,7 +321,8 @@ if cfg.init_from == "scratch":
 
 elif cfg.init_from == "resume":
     ckpt_path = os.path.join(cfg.out_dir, "ckpt.pt")
-    print(f"[model] resuming from {ckpt_path} …")
+    if _is_master:
+        print(f"[model] resuming from {ckpt_path} …")
     checkpoint = torch.load(ckpt_path, map_location=device)
     if expected_classes is not None and checkpoint["num_classes"] != expected_classes:
         raise ValueError(
@@ -322,11 +333,12 @@ elif cfg.init_from == "resume":
     # Older checkpoints (before qk_norm was saved) default to False.
     ckpt_qk_norm = checkpoint.get("qk_norm", False)
     if "qk_norm" not in checkpoint and cfg.qk_norm != ckpt_qk_norm:
-        print(
-            f"[warn] checkpoint has no 'qk_norm' field (assumed False); "
-            f"cfg.qk_norm={cfg.qk_norm} will be ignored — using False to "
-            "match the checkpoint architecture."
-        )
+        if _is_master:
+            print(
+                f"[warn] checkpoint has no 'qk_norm' field (assumed False); "
+                f"cfg.qk_norm={cfg.qk_norm} will be ignored — using False to "
+                "match the checkpoint architecture."
+            )
     model = build_hooked_vit(
         model_name=checkpoint["model_name"],
         num_classes=checkpoint["num_classes"],
@@ -347,7 +359,8 @@ elif cfg.init_from == "resume":
     best_val_loss = checkpoint.get("best_val_loss", float("inf"))
 
 else:
-    print(f"[model] fine-tuning from checkpoint {cfg.init_from} …")
+    if _is_master:
+        print(f"[model] fine-tuning from checkpoint {cfg.init_from} …")
     checkpoint = torch.load(cfg.init_from, map_location=device)
     ckpt_num_classes = checkpoint.get("num_classes", cfg.num_classes)
     if expected_classes is not None and ckpt_num_classes != expected_classes:
@@ -359,11 +372,12 @@ else:
     # Older checkpoints (before qk_norm was saved) default to False.
     ckpt_qk_norm = checkpoint.get("qk_norm", False)
     if "qk_norm" not in checkpoint and cfg.qk_norm != ckpt_qk_norm:
-        print(
-            f"[warn] checkpoint has no 'qk_norm' field (assumed False); "
-            f"cfg.qk_norm={cfg.qk_norm} will be ignored — using False to "
-            "match the checkpoint architecture."
-        )
+        if _is_master:
+            print(
+                f"[warn] checkpoint has no 'qk_norm' field (assumed False); "
+                f"cfg.qk_norm={cfg.qk_norm} will be ignored — using False to "
+                "match the checkpoint architecture."
+            )
     model = build_hooked_vit(
         model_name=checkpoint.get("model_name", cfg.model_name),
         num_classes=checkpoint.get("num_classes", cfg.num_classes),
@@ -382,10 +396,12 @@ else:
     model.load_state_dict(state_dict)
 
 n_params = sum(p.numel() for p in model.parameters()) / 1e6
-print(f"[model] {cfg.model_name}  {n_params:.2f}M parameters")
+if _is_master:
+    print(f"[model] {cfg.model_name}  {n_params:.2f}M parameters")
 
 if cfg.compile:
-    print("[model] compiling with torch.compile (disable for Hessian metrics)")
+    if _is_master:
+        print("[model] compiling with torch.compile (disable for Hessian metrics)")
     model = torch.compile(model)
 
 if use_ddp:
@@ -540,7 +556,8 @@ history: dict[str, list] = {
     "lr": [],
 }
 
-print(f"\n[train] starting — max_iters={cfg.max_iters}  device={device}\n")
+if _is_master:
+    print(f"\n[train] starting — max_iters={cfg.max_iters}  device={device}\n")
 t0 = time.time()
 model.train()
 
@@ -557,10 +574,11 @@ for iter_num in range(iter_num, cfg.max_iters):
     # ---- Temperature-shift intervention ----
     if cfg.temp_shift_step >= 0 and iter_num == cfg.temp_shift_step:
         set_attention_temperature(model, cfg.temp_shift_factor)
-        print(
-            f"[temp_shift] iter {iter_num}: applied temperature={cfg.temp_shift_factor:.4g} "
-            f"to all attention heads"
-        )
+        if _is_master:
+            print(
+                f"[temp_shift] iter {iter_num}: applied temperature={cfg.temp_shift_factor:.4g} "
+                f"to all attention heads"
+            )
         if cfg.wandb_log and (not use_ddp or rank == 0):
             wandb.log({"intervention/temp_shift_factor": cfg.temp_shift_factor}, step=iter_num)
 
@@ -569,10 +587,11 @@ for iter_num in range(iter_num, cfg.max_iters):
         val_loss, val_acc = estimate_val_metrics()
         history["val_loss"].append((iter_num, val_loss))
         history["val_acc"].append((iter_num, val_acc))
-        print(
-            f"[eval] iter {iter_num:5d} | val_loss {val_loss:.4f} "
-            f"| val_acc {val_acc:.2f}%  | best {best_val_loss:.4f}"
-        )
+        if _is_master:
+            print(
+                f"[eval] iter {iter_num:5d} | val_loss {val_loss:.4f} "
+                f"| val_acc {val_acc:.2f}%  | best {best_val_loss:.4f}"
+            )
         if cfg.wandb_log and (not use_ddp or rank == 0):
             wandb.log(
                 {"val/loss": val_loss, "val/acc": val_acc},
@@ -621,7 +640,8 @@ for iter_num in range(iter_num, cfg.max_iters):
                 compute_fd=cfg.compute_fd,
             )
         except Exception as exc:
-            print(f"[warn] curvature metrics failed at iter {iter_num}: {exc}")
+            if _is_master:
+                print(f"[warn] curvature metrics failed at iter {iter_num}: {exc}")
         finally:
             optimizer.zero_grad()
 
@@ -662,17 +682,18 @@ for iter_num in range(iter_num, cfg.max_iters):
     if iter_num % cfg.log_interval == 0:
         dt = time.time() - t0
         t0 = time.time()
-        print(
-            f"iter {iter_num:5d} | loss {loss_val:.4f} | acc {train_acc:.1f}% "
-            f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
-        )
-        if iter_num % cfg.hessian_freq == 0:
+        if _is_master:
             print(
-                f"  H {curvature['hessian']:.3f} | H_VV {curvature['hessian_vv']:.3f} "
-                f"| GN {curvature['gn']:.3f} | DiagH {curvature['diag_h']:.3f} "
-                f"| Fisher {curvature['fisher']:.3f} | BFGS {curvature['bfgs']:.3f} "
-                f"| KFAC {curvature['kfac']:.3f}"
+                f"iter {iter_num:5d} | loss {loss_val:.4f} | acc {train_acc:.1f}% "
+                f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
             )
+            if iter_num % cfg.hessian_freq == 0:
+                print(
+                    f"  H {curvature['hessian']:.3f} | H_VV {curvature['hessian_vv']:.3f} "
+                    f"| GN {curvature['gn']:.3f} | DiagH {curvature['diag_h']:.3f} "
+                    f"| Fisher {curvature['fisher']:.3f} | BFGS {curvature['bfgs']:.3f} "
+                    f"| KFAC {curvature['kfac']:.3f}"
+                )
         if cfg.wandb_log and (not use_ddp or rank == 0):
             log_dict: dict = {
                 "train/loss": loss_val,

@@ -269,7 +269,38 @@ def get_curvature_metrics(
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 5. Finite-Difference proxy  FD = ‖Δg‖ / ‖Δw‖
+    # 5. Diagonal Hessian  (Hutchinson trace estimator)
+    #
+    # Tr(H) = E_z[z^T H z]  where z ~ Rademacher(±1).
+    # We average over a few random vectors for a cheap trace estimate.
+    #
+    # NOTE: This MUST run before the FD / BFGS sections because those
+    # call optimizer.step(), which modifies parameters in-place and
+    # invalidates the computation graph of ``loss``.
+    # ------------------------------------------------------------------ #
+    diag_h_norm = 0.0
+    n_hutchinson = max(1, max_iter // 2)
+    try:
+        grads_diag = torch.autograd.grad(
+            loss, model.parameters(), create_graph=True, retain_graph=True
+        )
+        flat_grads_diag = torch.cat([g.reshape(-1) for g in grads_diag])
+        trace_sum = 0.0
+        for _ in range(n_hutchinson):
+            z = torch.randint(0, 2, flat_grads_diag.shape, device=flat_grads_diag.device).float() * 2.0 - 1.0
+            hz = torch.autograd.grad(
+                flat_grads_diag, model.parameters(), grad_outputs=z, retain_graph=True
+            )
+            flat_hz = torch.cat([g.contiguous().reshape(-1) for g in hz])
+            trace_sum += torch.dot(z, flat_hz).item()
+        diag_h_norm = trace_sum / n_hutchinson
+        del grads_diag, flat_grads_diag
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------ #
+    # 6. Finite-Difference proxy  FD = ‖Δg‖ / ‖Δw‖
     # ------------------------------------------------------------------ #
     fd_norm = 0.0
     if compute_fd:
@@ -296,33 +327,6 @@ def get_curvature_metrics(
         dg = g_k1 - g_k
         fd_norm = (dg.norm() / (dw.norm() + 1e-9)).item()
         optimizer.zero_grad()
-
-    # ------------------------------------------------------------------ #
-    # 6. Diagonal Hessian  (Hutchinson trace estimator)
-    #
-    # Tr(H) = E_z[z^T H z]  where z ~ Rademacher(±1).
-    # We average over a few random vectors for a cheap trace estimate.
-    # ------------------------------------------------------------------ #
-    diag_h_norm = 0.0
-    n_hutchinson = max(1, max_iter // 2)
-    try:
-        grads_diag = torch.autograd.grad(
-            loss, model.parameters(), create_graph=True, retain_graph=True
-        )
-        flat_grads_diag = torch.cat([g.reshape(-1) for g in grads_diag])
-        trace_sum = 0.0
-        for _ in range(n_hutchinson):
-            z = torch.randint(0, 2, flat_grads_diag.shape, device=flat_grads_diag.device).float() * 2.0 - 1.0
-            hz = torch.autograd.grad(
-                flat_grads_diag, model.parameters(), grad_outputs=z, retain_graph=True
-            )
-            flat_hz = torch.cat([g.contiguous().reshape(-1) for g in hz])
-            trace_sum += torch.dot(z, flat_hz).item()
-        diag_h_norm = trace_sum / n_hutchinson
-        del grads_diag, flat_grads_diag
-    except Exception:
-        pass
-    torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
     # 7. Empirical Fisher Information Matrix  Tr(F) = ‖g‖²

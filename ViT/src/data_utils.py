@@ -130,15 +130,17 @@ def load_data(
         train_path = os.path.join(data_dir, "train")
         val_path = os.path.join(data_dir, "val")
         if os.path.isdir(train_path) and os.path.isdir(val_path):
-            print(f"[data] loading local ImageNet from '{data_dir}'")
+            if int(os.environ.get("RANK", "0")) == 0:
+                print(f"[data] loading local ImageNet from '{data_dir}'")
             train_ds = torchvision.datasets.ImageFolder(train_path, transform=train_tf)
             val_ds = torchvision.datasets.ImageFolder(val_path, transform=val_tf)
         else:
             # Download via HF and cache locally; subsequent runs reuse the cache.
-            print(
-                f"[data] local ImageNet not found at '{data_dir}', "
-                "downloading from Hugging Face (cached for future runs) …"
-            )
+            if int(os.environ.get("RANK", "0")) == 0:
+                print(
+                    f"[data] local ImageNet not found at '{data_dir}', "
+                    "downloading from Hugging Face (cached for future runs) …"
+                )
             try:
                 from datasets import load_dataset
             except ImportError as exc:
@@ -147,13 +149,14 @@ def load_data(
                     "Install with: pip install datasets"
                 ) from exc
 
+            hf_cache = os.path.abspath(data_dir)
             train_hf = load_dataset(
                 "imagenet-1k", split="train",
-                cache_dir=data_dir, token=True,
+                cache_dir=hf_cache, token=True,
             )
             val_hf = load_dataset(
                 "imagenet-1k", split="validation",
-                cache_dir=data_dir, token=True,
+                cache_dir=hf_cache, token=True,
             )
             train_ds = _HFDatasetWrapper(train_hf, transform=train_tf)
             val_ds = _HFDatasetWrapper(val_hf, transform=val_tf)
