@@ -486,7 +486,7 @@ def estimate_val_metrics(n_batches: int = 10) -> tuple[float, float]:
         xv, yv = xv.to(device), yv.to(device)
         with ctx:
             logits = _raw_model(xv)
-        lv = F.cross_entropy(logits, yv, label_smoothing=cfg.label_smoothing)
+        lv = F.cross_entropy(logits, yv)
         losses.append(lv.item())
         correct += (logits.argmax(dim=-1) == yv).sum().item()
         total += yv.size(0)
