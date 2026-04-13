@@ -18,6 +18,7 @@ import os
 import warnings
 
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader, Dataset
 import torchvision
 import torchvision.transforms as T
@@ -117,20 +118,43 @@ def load_data(
 
     dataset_key = dataset.lower()
 
+    # DDP-safe download: only rank 0 downloads, others wait at a barrier.
+    _rank = int(os.environ.get("RANK", "0"))
+    _world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    _is_ddp = _world_size > 1
+
     if dataset_key == "cifar10":
+        if _is_ddp:
+            if _rank == 0:
+                torchvision.datasets.CIFAR10(
+                    root=data_dir, train=True, download=True,
+                )
+                torchvision.datasets.CIFAR10(
+                    root=data_dir, train=False, download=True,
+                )
+            dist.barrier()
         train_ds = torchvision.datasets.CIFAR10(
-            root=data_dir, train=True, download=True, transform=train_tf
+            root=data_dir, train=True, download=not _is_ddp, transform=train_tf
         )
         val_ds = torchvision.datasets.CIFAR10(
-            root=data_dir, train=False, download=True, transform=val_tf
+            root=data_dir, train=False, download=not _is_ddp, transform=val_tf
         )
 
     elif dataset_key == "cifar100":
+        if _is_ddp:
+            if _rank == 0:
+                torchvision.datasets.CIFAR100(
+                    root=data_dir, train=True, download=True,
+                )
+                torchvision.datasets.CIFAR100(
+                    root=data_dir, train=False, download=True,
+                )
+            dist.barrier()
         train_ds = torchvision.datasets.CIFAR100(
-            root=data_dir, train=True, download=True, transform=train_tf
+            root=data_dir, train=True, download=not _is_ddp, transform=train_tf
         )
         val_ds = torchvision.datasets.CIFAR100(
-            root=data_dir, train=False, download=True, transform=val_tf
+            root=data_dir, train=False, download=not _is_ddp, transform=val_tf
         )
 
     elif dataset_key in (
