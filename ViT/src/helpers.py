@@ -162,17 +162,19 @@ def get_curvature_metrics(
                        subspace (H_VV).
     * ``gn``         — λ_max of the Gauss-Newton matrix H_GN, computed
                        via JVP / VJP factorisation.
-    * ``fd``         — Finite-difference sharpness proxy
-                       ‖Δg‖ / ‖Δw‖  between two consecutive steps.
+    * ``fd``         — λ_max(H) estimated via power iteration with
+                       forward-difference HVPs.
                        Only computed when ``compute_fd=True``.
-    * ``diag_h``     — Trace of the diagonal Hessian, estimated via
-                       Hutchinson's stochastic trace estimator using
-                       Rademacher random vectors.
-    * ``fisher``     — Trace of the empirical Fisher information matrix,
-                       Tr(F) = ‖g‖², where g is the mini-batch gradient.
-    * ``bfgs``       — L-BFGS curvature estimate s^T y / s^T s from
-                       the most recent parameter / gradient displacement
-                       pair (finite-difference secant curvature).
+    * ``diag_h``     — max(diag(H)), the largest diagonal entry of H,
+                       estimated via the Bekas–Kokiopoulou–Saad
+                       Hutchinson diagonal estimator with Rademacher
+                       random vectors.
+    * ``fisher``     — λ_max of the empirical Fisher information matrix
+                       F = (1/B) Σ_i g_i g_i^T, estimated via power
+                       iteration on Fisher-vector products (JVP/VJP on
+                       per-sample losses).
+    * ``bfgs``       — λ_max(H) estimated via power iteration with
+                       central-difference HVPs (O(ε²) accurate).
     * ``kfac``       — Kronecker-Factored Approximate Curvature (K-FAC)
                        proxy: max Kronecker-factor eigenvalue product
                        across all linear layers, estimated from cached
@@ -339,14 +341,17 @@ def get_curvature_metrics(
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 5. Diagonal Hessian  (Hutchinson trace estimator)
+    # 5. Diagonal Hessian  max(diag(H))  — Bekas–Kokiopoulou–Saad
     #
-    # Tr(H) = E_z[z^T H z]  where z ~ Rademacher(±1).
-    # We average over a few random vectors for a cheap trace estimate.
+    # Estimate the diagonal of H via the Hutchinson diagonal estimator:
+    #   d̂_i = E_z[ z_i · (Hz)_i ]  where z ~ Rademacher(±1).
+    # Then report max_i(d̂_i) — the largest per-parameter curvature.
+    # This is λ_max(diag(H)), a spectral quantity comparable to the
+    # other λ_max proxies.
     #
-    # NOTE: This MUST run before the FD / BFGS sections because those
-    # call optimizer.step(), which modifies parameters in-place and
-    # invalidates the computation graph of ``loss``.
+    # NOTE: This MUST run before the BFGS / FD sections (7, 9) which
+    # perturb parameters in-place and would invalidate the live
+    # computation graph of ``loss``.
     # ------------------------------------------------------------------ #
     diag_h_norm = 0.0
     n_hutchinson = max(1, max_iter // 2)
@@ -355,107 +360,147 @@ def get_curvature_metrics(
             loss, model.parameters(), create_graph=True, retain_graph=True
         )
         flat_grads_diag = torch.cat([g.reshape(-1) for g in grads_diag])
-        trace_sum = 0.0
+        diag_acc = torch.zeros_like(flat_grads_diag)
         for _ in range(n_hutchinson):
             z = torch.randint(0, 2, flat_grads_diag.shape, device=flat_grads_diag.device).float() * 2.0 - 1.0
             hz = torch.autograd.grad(
                 flat_grads_diag, model.parameters(), grad_outputs=z, retain_graph=True
             )
             flat_hz = torch.cat([g.contiguous().reshape(-1) for g in hz])
-            trace_sum += torch.dot(z, flat_hz).item()
-        diag_h_norm = trace_sum / n_hutchinson
-        del grads_diag, flat_grads_diag
+            diag_acc += z * flat_hz          # element-wise: z_i·(Hz)_i ≈ H_ii
+        diag_acc /= n_hutchinson
+        diag_h_norm = diag_acc.max().item()  # λ_max(diag(H))
+        del grads_diag, flat_grads_diag, diag_acc
     except Exception:
         pass
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 6. Finite-Difference proxy  FD = ‖Δg‖ / ‖Δw‖
-    # ------------------------------------------------------------------ #
-    fd_norm = 0.0
-    if compute_fd:
-        w_k = torch.cat([p.data.reshape(-1) for p in model.parameters()])
-
-        optimizer.zero_grad()
-        logits_fd = model(X)
-        loss_fd = F.cross_entropy(logits_fd, Y)
-        loss_fd.backward()
-        g_k = torch.cat([p.grad.reshape(-1) for p in model.parameters()])
-
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
-
-        w_k1 = torch.cat([p.data.reshape(-1) for p in model.parameters()])
-
-        optimizer.zero_grad()
-        logits_next = model(X)
-        loss_next = F.cross_entropy(logits_next, Y)
-        loss_next.backward()
-        g_k1 = torch.cat([p.grad.reshape(-1) for p in model.parameters()])
-
-        dw = w_k1 - w_k
-        dg = g_k1 - g_k
-        fd_norm = (dg.norm() / (dw.norm() + 1e-9)).item()
-        optimizer.zero_grad()
-
-    # ------------------------------------------------------------------ #
-    # 7. Empirical Fisher Information Matrix  Tr(F) = ‖g‖²
+    # 6. Empirical Fisher  λ_max(F)  via power iteration
     #
-    # The empirical Fisher is F = g g^T, so Tr(F) = ‖g‖².
-    # We compute the gradient on the current mini-batch.
+    # F = (1/B) Σ_i g_i g_i^T  where g_i = ∂ℓ_i/∂θ (per-sample grad).
+    # Fisher-vector product:  Fv = (1/B) J_ℓ^T (J_ℓ v)
+    # where J_ℓ is the (B×P) Jacobian of per-sample losses w.r.t. θ.
+    # We compute J_ℓ v via JVP on per-sample losses and J_ℓ^T(·) via VJP,
+    # using the same autograd_functional pattern as the GN section.
     # ------------------------------------------------------------------ #
     fisher_norm = 0.0
     try:
-        optimizer.zero_grad()
-        logits_f = model(X)
-        loss_fisher = F.cross_entropy(logits_f, Y)
-        loss_fisher.backward()
-        fisher_g = torch.cat([p.grad.reshape(-1) for p in model.parameters() if p.grad is not None])
-        fisher_norm = fisher_g.norm().square().item()
-        optimizer.zero_grad()
-        del fisher_g
+        def _fwd_loss_tuple(*p_vals: torch.Tensor) -> torch.Tensor:
+            """Per-sample cross-entropy (reduction='none')."""
+            p_dict = {k: v for k, v in zip(params_keys, p_vals)}
+            logits = functional_call(model, p_dict, (X,))
+            return F.cross_entropy(logits, Y, reduction="none")  # (B,)
+
+        B = X.size(0)
+        v_f = torch.randn_like(flat_params)
+        v_f = v_f / (v_f.norm() + 1e-9)
+        flat_fv: torch.Tensor | None = None
+
+        for _ in range(max_iter):
+            # JVP: J_ℓ v → (B,) per-sample directional derivatives
+            tangents_f: list[torch.Tensor] = []
+            offset = 0
+            for p in params_vals:
+                numel = p.numel()
+                tangents_f.append(v_f[offset : offset + numel].view_as(p))
+                offset += numel
+
+            _, Jv_f = autograd_functional.jvp(
+                _fwd_loss_tuple, tuple(params_vals), tuple(tangents_f),
+                create_graph=False,
+            )  # Jv_f: (B,)
+
+            # VJP: J_ℓ^T (Jv_f) → (1/B) Fisher-vector product
+            _, vjp_f = autograd_functional.vjp(
+                _fwd_loss_tuple, tuple(params_vals), Jv_f.detach(),
+            )
+
+            flat_fv = torch.cat(
+                [g.contiguous().reshape(-1) for g in vjp_f]
+            ) / B
+            v_f = flat_fv / (flat_fv.norm() + 1e-9)
+
+            del Jv_f, vjp_f, tangents_f
+            torch.cuda.empty_cache()
+
+        fisher_norm = torch.dot(v_f, flat_fv).item() if flat_fv is not None else 0.0
+        del v_f
+        if flat_fv is not None:
+            del flat_fv
     except Exception:
         pass
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 8. L-BFGS Curvature Estimate  s^T y / s^T s
+    # 7. FD-Spectral (Central Differences) — λ_max(H) via finite diffs
     #
-    # Secant-equation curvature: take one optimiser step and compute
-    # the curvature along the parameter displacement via the change
-    # in gradients: (y = g_{k+1} - g_k, s = w_{k+1} - w_k).
+    # Power iteration where HVPs are approximated by central differences
+    #   Hv ≈ [∇L(w + εv) − ∇L(w − εv)] / (2ε)
+    # This is O(ε²) accurate and provides a spectral λ_max estimate
+    # without relying on autograd second-order graphs.
+    # Non-destructive: parameters are perturbed then restored.
     # ------------------------------------------------------------------ #
     bfgs_norm = 0.0
     try:
-        w0 = torch.cat([p.data.reshape(-1).clone() for p in model.parameters()])
-        optimizer.zero_grad()
-        logits_b0 = model(X)
-        loss_b0 = F.cross_entropy(logits_b0, Y)
-        loss_b0.backward()
-        g0 = torch.cat([p.grad.reshape(-1).clone() for p in model.parameters()])
+        eps_cd = 1e-4
+        v_b = torch.randn_like(flat_params)
+        v_b = v_b / (v_b.norm() + 1e-9)
+        flat_bv: torch.Tensor | None = None
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        for _ in range(max_iter):
+            # ---- +ε perturbation ----
+            offset = 0
+            for p in params_vals:
+                numel = p.numel()
+                p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
+                offset += numel
 
-        w1 = torch.cat([p.data.reshape(-1) for p in model.parameters()])
-        optimizer.zero_grad()
-        logits_b1 = model(X)
-        loss_b1 = F.cross_entropy(logits_b1, Y)
-        loss_b1.backward()
-        g1 = torch.cat([p.grad.reshape(-1) for p in model.parameters()])
+            optimizer.zero_grad()
+            loss_bp = F.cross_entropy(model(X), Y)
+            loss_bp.backward()
+            g_plus = torch.cat(
+                [p.grad.reshape(-1).clone() for p in model.parameters()]
+            )
 
-        s = w1 - w0
-        y_bfgs = g1 - g0
-        sts = torch.dot(s, s)
-        bfgs_norm = (torch.dot(s, y_bfgs) / (sts + 1e-9)).item()
+            # ---- −ε perturbation  (shift by −2ε from current +ε state) ----
+            offset = 0
+            for p in params_vals:
+                numel = p.numel()
+                p.data.add_(-2.0 * eps_cd * v_b[offset : offset + numel].view_as(p))
+                offset += numel
+
+            optimizer.zero_grad()
+            loss_bm = F.cross_entropy(model(X), Y)
+            loss_bm.backward()
+            g_minus = torch.cat(
+                [p.grad.reshape(-1).clone() for p in model.parameters()]
+            )
+
+            # ---- Restore original parameters ----
+            offset = 0
+            for p in params_vals:
+                numel = p.numel()
+                p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
+                offset += numel
+
+            flat_bv = (g_plus - g_minus) / (2.0 * eps_cd)
+            v_b = flat_bv / (flat_bv.norm() + 1e-9)
+
+            del g_plus, g_minus
+            torch.cuda.empty_cache()
+
+        bfgs_norm = torch.dot(v_b, flat_bv).item() if flat_bv is not None else 0.0
         optimizer.zero_grad()
-        del w0, w1, g0, g1, s, y_bfgs
+        del v_b
+        if flat_bv is not None:
+            del flat_bv
     except Exception:
         pass
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 9. K-FAC Proxy  (Kronecker-Factored Approximate Curvature)
+    # 8. K-FAC Proxy  (Kronecker-Factored Approximate Curvature)
     #
     # For each Linear layer we estimate two small covariance factors:
     #   A = (1/B) a a^T   (input activations, registered via forward hook)
@@ -522,6 +567,70 @@ def get_curvature_metrics(
     except Exception:
         pass
     torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------------ #
+    # 9. FD-Spectral (Forward Differences) — λ_max(H) via finite diffs
+    #
+    # Power iteration where HVPs are approximated by forward differences
+    #   Hv ≈ [∇L(w + εv) − ∇L(w)] / ε
+    # O(ε) accurate, half the cost of central differences (section 7).
+    # Comparing BFGS (central) vs FD (forward) reveals FD-accuracy
+    # sensitivity.  Non-destructive: parameters are restored each step.
+    # ------------------------------------------------------------------ #
+    fd_norm = 0.0
+    if compute_fd:
+        try:
+            eps_fd = 1e-4
+            # Base gradient at unperturbed parameters
+            optimizer.zero_grad()
+            loss_f0 = F.cross_entropy(model(X), Y)
+            loss_f0.backward()
+            g_base = torch.cat(
+                [p.grad.reshape(-1).clone() for p in model.parameters()]
+            )
+
+            v_fd = torch.randn_like(flat_params)
+            v_fd = v_fd / (v_fd.norm() + 1e-9)
+            flat_fdv: torch.Tensor | None = None
+
+            for _ in range(max_iter):
+                # +ε perturbation
+                offset = 0
+                for p in params_vals:
+                    numel = p.numel()
+                    p.data.add_(eps_fd * v_fd[offset : offset + numel].view_as(p))
+                    offset += numel
+
+                optimizer.zero_grad()
+                loss_fp = F.cross_entropy(model(X), Y)
+                loss_fp.backward()
+                g_pert = torch.cat(
+                    [p.grad.reshape(-1).clone() for p in model.parameters()]
+                )
+
+                # Restore original parameters
+                offset = 0
+                for p in params_vals:
+                    numel = p.numel()
+                    p.data.add_(-eps_fd * v_fd[offset : offset + numel].view_as(p))
+                    offset += numel
+
+                flat_fdv = (g_pert - g_base) / eps_fd
+                v_fd = flat_fdv / (flat_fdv.norm() + 1e-9)
+
+                del g_pert
+                torch.cuda.empty_cache()
+
+            fd_norm = (
+                torch.dot(v_fd, flat_fdv).item() if flat_fdv is not None else 0.0
+            )
+            optimizer.zero_grad()
+            del v_fd, g_base
+            if flat_fdv is not None:
+                del flat_fdv
+        except Exception:
+            pass
+        torch.cuda.empty_cache()
 
     return {
         "hessian": hessian_norm,
