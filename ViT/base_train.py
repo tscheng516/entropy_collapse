@@ -5,7 +5,11 @@ This script trains a HookedViT model (timm ViT-Small by default) while
 logging:
   * Train loss / accuracy — every iteration
   * Val loss / accuracy   — every ``eval_interval`` iterations
-  * Hessian proxies (H, H_tilde, H_VV, H_GN, FD, Diag_H, Fisher, BFGS, KFAC)
+  * Curvature metrics — spectral-norm (λ_max) estimates for all nine proxies:
+                         H (exact), H_tilde (Adam-preconditioned), H_VV (value
+                         subspace), H_GN (Gauss-Newton), H_BFGS (central-diff
+                         FD), H_FD (forward-diff FD), Diag_H (max diagonal),
+                         Fisher (empirical), KFAC
                          — every ``hessian_freq`` iterations
   * Per-layer attention entropy
                          — every ``entropy_freq`` iterations
@@ -62,6 +66,7 @@ from contextlib import nullcontext
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend for headless servers
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -129,6 +134,7 @@ parser.add_argument("--cp", type=str)
 parser.add_argument("--optim", type=str)
 parser.add_argument("--lr", type=float)
 parser.add_argument("--max_it", type=int)
+parser.add_argument("--num_workers", type=int)
 parser.add_argument("--wandb", type=str)
 parser.add_argument(
     "--temp_shift",
@@ -157,6 +163,7 @@ _maybe_set("init_from", known_args.cp)
 _maybe_set("optimizer", known_args.optim)
 _maybe_set("learning_rate", known_args.lr)
 _maybe_set("max_iters", known_args.max_it)
+_maybe_set("num_workers", known_args.num_workers)
 if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
@@ -477,7 +484,18 @@ if cfg.wandb_log:
         )
 
 # ---------------------------------------------------------------------------
-# 8.  Helper: Hessian metrics & entropy
+# 8.  Helpers: curvature (spectral-norm) metrics & attention entropy
+#
+#   get_curvature_metrics  returns λ_max estimates for nine curvature proxies:
+#     hessian   — λ_max(H)               exact Hessian, power iteration
+#     prec_h    — λ_max(D^{-½} H D^{-½}) Adam-preconditioned Hessian
+#     hessian_vv— λ_max(H_VV)            H restricted to value-proj subspace
+#     gn        — λ_max(H_GN)            Gauss-Newton (J^T H_L J)
+#     bfgs      — λ_max(H)               central-difference FD (O(ε²))
+#     fd        — λ_max(H)               forward-difference FD (O(ε))
+#     diag_h    — max(diag(H))           Bekas–Kokiopoulou–Saad estimator
+#     fisher    — λ_max(F)               empirical Fisher
+#     kfac      — max λ_max(A)·λ_max(G)  K-FAC Kronecker proxy
 # ---------------------------------------------------------------------------
 from src.helpers import (  # noqa: E402
     get_VV_subspace_mask,
@@ -609,7 +627,9 @@ for iter_num in range(iter_num, cfg.max_iters):
     if cfg.checkpoint_interval > 0 and iter_num % cfg.checkpoint_interval == 0 and iter_num > 0:
         _save_checkpoint(f"ckpt_iter{iter_num:06d}")
 
-    # ---- Hessian metrics ----
+    # ---- Curvature metrics (spectral norm) ----
+    # All nine proxies are λ_max (or max-diagonal) estimates; reset to 0 on
+    # non-measurement iterations so history entries have consistent length.
     curvature: dict[str, float] = {
         "hessian": 0.0,
         "prec_h": 0.0,
@@ -700,9 +720,10 @@ for iter_num in range(iter_num, cfg.max_iters):
             )
             if iter_num % cfg.hessian_freq == 0:
                 print(
-                    f"  H {curvature['hessian']:.3f} | H_VV {curvature['hessian_vv']:.3f} "
-                    f"| GN {curvature['gn']:.3f} | DiagH {curvature['diag_h']:.3f} "
-                    f"| Fisher {curvature['fisher']:.3f} | BFGS {curvature['bfgs']:.3f} "
+                    f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
+                    f"| H_VV {curvature['hessian_vv']:.3f} | GN {curvature['gn']:.3f} "
+                    f"| BFGS {curvature['bfgs']:.3f} | FD {curvature['fd']:.3f} "
+                    f"| DiagH {curvature['diag_h']:.3f} | Fisher {curvature['fisher']:.3f} "
                     f"| KFAC {curvature['kfac']:.3f}"
                 )
         if cfg.wandb_log and (not use_ddp or rank == 0):
@@ -752,42 +773,56 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from src.plotting import plot_training_dynamics, plot_spike_cooccurrence, print_correlations, print_smooth_correlations  # noqa: E402
+    from src.plotting import (  # noqa: E402
+        plot_training_dynamics,
+        plot_all_spike_cooccurrences,
+        plot_curvature_smoothed_comparison,
+        print_correlations,
+    )
 
-    # --- Raw and smoothed correlation analysis ---
-    print_correlations(history, "Run")
-    print_smooth_correlations(history, "Run", lam=100.0)
+    # --- Unified raw + smoothed correlation analysis ---
+    print_correlations(history, "Run", lam=100.0, include_smooth=True)
 
     fig = plot_training_dynamics(
         histories={"Run": history},
         lrs={"Run": cfg.learning_rate},
         save_path=os.path.join(run_out_dir, "training_dynamics.png"),
     )
+    plt.close(fig)
     print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
 
-    spike_targets = [
-        ("hessian_vv", "H_VV", "hessian_vv"),
-        ("prec_h", "Prec_H", "hessian_prec"),
-        ("gn", "GN", "hessian_gn"),
-        ("diag_h", "Diag_H", "hessian_diag"),
-        ("fisher", "Fisher", "hessian_fisher"),
-        ("bfgs", "BFGS", "hessian_bfgs"),
-        ("kfac", "KFAC", "hessian_kfac"),
-    ]
+    # --- Smoothed curvature metrics comparison ---
+    fig_smooth = plot_curvature_smoothed_comparison(
+        history,
+        lam=100.0,
+        save_path=os.path.join(run_out_dir, "curvature_smoothed_comparison.png"),
+    )
+    plt.close(fig_smooth)
+    print(f"[plot] smoothed curvature comparison → {os.path.join(run_out_dir, 'curvature_smoothed_comparison.png')}")
+
+    proxy_label = {
+        "prec_h": "Prec_H",
+        "hessian_vv": "H_VV",
+        "gn": "GN",
+        "fd": "FD",
+        "diag_h": "Diag_H",
+        "fisher": "Fisher",
+        "bfgs": "BFGS",
+        "kfac": "KFAC",
+    }
     for z in (1.5, 2):
-        for key, label, suffix in spike_targets:
-            _, res = plot_spike_cooccurrence(
-                history["hessian"],
-                history[key],
-                x_name="Exact H",
-                y_name=label,
-                window=15,
-                z_score=z,
-                save_path=os.path.join(
-                    run_out_dir,
-                    f"spike_cooccurrence_H_vs_{suffix}_z{z}.png",
-                ),
-            )
+        spike_figs, spike_results = plot_all_spike_cooccurrences(
+            history,
+            window=15,
+            z_score=z,
+            log_scale=True,
+            save_dir=run_out_dir,
+        )
+        for fig_spike in spike_figs.values():
+            plt.close(fig_spike)
+
+        for key, res in spike_results.items():
+            label = proxy_label.get(key, key)
             print(
                 f"[plot] z={z} spike co-occurrence: "
                 f"P({label} spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}"

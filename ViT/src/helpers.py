@@ -8,12 +8,12 @@ Hessian matrix; instead we use power iteration on Hessian-vector products
 Functions
 ---------
 get_VV_subspace_mask     — Binary mask selecting value-projection params.
-get_curvature_metrics    — All nine sharpness proxies in one pass:
-                             H (exact), H_tilde (preconditioned),
-                             H_VV (value subspace), H_GN (Gauss-Newton),
-                             FD (finite-difference), diag_h (diagonal
-                             Hessian), fisher (empirical Fisher), bfgs
-                             (L-BFGS curvature), kfac (K-FAC curvature).
+get_curvature_metrics    — All nine sharpness proxies as spectral norms:
+                             hessian (exact H), prec_h (preconditioned H),
+                             hessian_vv (value-projection subspace H),
+                             gn (Gauss-Newton), bfgs (central-diff FD),
+                             fd (forward-diff FD), diag_h (diagonal Hessian),
+                             fisher (empirical Fisher), kfac (K-FAC).
 get_attention_entropy    — Per-layer Shannon entropy of cached attention.
 """
 
@@ -152,7 +152,9 @@ def get_curvature_metrics(
     """
     Compute nine sharpness proxies for the current model state.
 
-    The proxies are (all estimated via power iteration unless stated):
+    The proxies are all spectral norms (λ_max estimates) estimated via power iteration,
+    except where noted otherwise (diagonal Hessian via Hutchinson estimation, K-FAC via
+    power iteration on smaller covariance factors).
 
     * ``hessian``    — λ_max of the full loss Hessian H.
     * ``prec_h``     — λ_max of the Adam-preconditioned Hessian
@@ -162,8 +164,10 @@ def get_curvature_metrics(
                        subspace (H_VV).
     * ``gn``         — λ_max of the Gauss-Newton matrix H_GN, computed
                        via JVP / VJP factorisation.
-    * ``fd``         — λ_max(H) estimated via power iteration with
-                       forward-difference HVPs.
+    * ``bfgs``       — λ_max(H) estimated via central-difference finite diffs
+                       (O(ε²) accurate).
+    * ``fd``         — λ_max(H) estimated via forward-difference finite diffs
+                       (O(ε) accurate, half the cost of BFGS).
                        Only computed when ``compute_fd=True``.
     * ``diag_h``     — max(diag(H)), the largest diagonal entry of H,
                        estimated via the Bekas–Kokiopoulou–Saad
@@ -173,8 +177,6 @@ def get_curvature_metrics(
                        F = (1/B) Σ_i g_i g_i^T, estimated via power
                        iteration on Fisher-vector products (JVP/VJP on
                        per-sample losses).
-    * ``bfgs``       — λ_max(H) estimated via power iteration with
-                       central-difference HVPs (O(ε²) accurate).
     * ``kfac``       — Kronecker-Factored Approximate Curvature (K-FAC)
                        proxy: max Kronecker-factor eigenvalue product
                        across all linear layers, estimated from cached
@@ -433,7 +435,7 @@ def get_curvature_metrics(
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 7. FD-Spectral (Central Differences) — λ_max(H) via finite diffs
+    # 7. BFGS (Central-Difference Spectral) — λ_max(H) via finite diffs
     #
     # Power iteration where HVPs are approximated by central differences
     #   Hv ≈ [∇L(w + εv) − ∇L(w − εv)] / (2ε)
@@ -569,11 +571,11 @@ def get_curvature_metrics(
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 9. FD-Spectral (Forward Differences) — λ_max(H) via finite diffs
+    # 9. FD (Forward-Difference Spectral) — λ_max(H) via finite diffs
     #
     # Power iteration where HVPs are approximated by forward differences
     #   Hv ≈ [∇L(w + εv) − ∇L(w)] / ε
-    # O(ε) accurate, half the cost of central differences (section 7).
+    # O(ε) accurate, half the cost of central differences (BFGS, section 7).
     # Comparing BFGS (central) vs FD (forward) reveals FD-accuracy
     # sensitivity.  Non-destructive: parameters are restored each step.
     # ------------------------------------------------------------------ #
