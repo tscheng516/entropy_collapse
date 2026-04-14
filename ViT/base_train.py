@@ -622,11 +622,11 @@ for iter_num in range(iter_num, cfg.max_iters):
                 step=iter_num,
             )
 
-        if (cfg.save_checkpoint) and iter_num > 0:
+        if (cfg.save_checkpoint or val_loss < best_val_loss) and iter_num > 0:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                _save_checkpoint("best_ckpt")
-            _save_checkpoint("ckpt")
+                # _save_checkpoint("best_ckpt")
+            # _save_checkpoint("ckpt")
 
     if cfg.checkpoint_interval > 0 and iter_num % cfg.checkpoint_interval == 0 and iter_num > 0:
         _save_checkpoint(f"ckpt_iter{iter_num:06d}")
