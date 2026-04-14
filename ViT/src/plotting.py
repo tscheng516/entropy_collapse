@@ -64,6 +64,14 @@ def _carry_forward_positive_2d(matrix: np.ndarray | list) -> np.ndarray:
     return out
 
 
+def _has_positive_finite(arr: np.ndarray | list) -> bool:
+    """Return True when an array contains at least one finite value > 0."""
+    a = np.asarray(arr, dtype=float).ravel()
+    if a.size == 0:
+        return False
+    return bool(np.any(np.isfinite(a) & (a > 0)))
+
+
 # ======================================================================
 # Curvature metrics — raw vs smoothed comparison
 # ======================================================================
@@ -116,7 +124,7 @@ def plot_curvature_smoothed_comparison(
     ax.plot(h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
 
     prec_arr = _carry_forward_positive(_as1d("prec_h"))
-    if prec_arr.size:
+    if _has_positive_finite(prec_arr):
         ax.plot(
             prec_arr,
             color="purple",
@@ -126,7 +134,7 @@ def plot_curvature_smoothed_comparison(
         )
 
     gn_arr = _carry_forward_positive(_as1d("gn"))
-    if gn_arr.size:
+    if _has_positive_finite(gn_arr):
         ax.plot(
             gn_arr,
             color="brown",
@@ -136,7 +144,7 @@ def plot_curvature_smoothed_comparison(
         )
 
     vv_arr = _carry_forward_positive(_as1d("hessian_vv"))
-    if vv_arr.size:
+    if _has_positive_finite(vv_arr):
         ax.plot(
             vv_arr,
             color="magenta",
@@ -146,7 +154,7 @@ def plot_curvature_smoothed_comparison(
         )
 
     diag_arr = _carry_forward_positive(_as1d("diag_h"))
-    if diag_arr.size:
+    if _has_positive_finite(diag_arr):
         ax.plot(
             diag_arr,
             color="teal",
@@ -156,7 +164,7 @@ def plot_curvature_smoothed_comparison(
         )
 
     fisher_arr = _carry_forward_positive(_as1d("fisher"))
-    if fisher_arr.size:
+    if _has_positive_finite(fisher_arr):
         ax.plot(
             fisher_arr,
             color="olive",
@@ -166,7 +174,7 @@ def plot_curvature_smoothed_comparison(
         )
 
     bfgs_arr = _carry_forward_positive(_as1d("bfgs"))
-    if bfgs_arr.size:
+    if _has_positive_finite(bfgs_arr):
         ax.plot(
             bfgs_arr,
             color="navy",
@@ -176,7 +184,7 @@ def plot_curvature_smoothed_comparison(
         )
 
     fd_arr = _carry_forward_positive(_as1d("fd"))
-    if fd_arr.size:
+    if _has_positive_finite(fd_arr):
         ax.plot(
             fd_arr,
             color="cyan",
@@ -186,7 +194,7 @@ def plot_curvature_smoothed_comparison(
         )
 
     kfac_arr = _carry_forward_positive(_as1d("kfac"))
-    if kfac_arr.size:
+    if _has_positive_finite(kfac_arr):
         ax.plot(
             kfac_arr,
             color="darkgreen",
@@ -206,21 +214,21 @@ def plot_curvature_smoothed_comparison(
             ax.plot(trend, color=color, linewidth=_smooth_lw, alpha=_smooth_alpha)
 
     _overlay_smooth(h_arr, "red")
-    if prec_arr.size:
+    if _has_positive_finite(prec_arr):
         _overlay_smooth(prec_arr, "purple")
-    if gn_arr.size:
+    if _has_positive_finite(gn_arr):
         _overlay_smooth(gn_arr, "brown")
-    if vv_arr.size:
+    if _has_positive_finite(vv_arr):
         _overlay_smooth(vv_arr, "magenta")
-    if diag_arr.size:
+    if _has_positive_finite(diag_arr):
         _overlay_smooth(diag_arr, "teal")
-    if fisher_arr.size:
+    if _has_positive_finite(fisher_arr):
         _overlay_smooth(fisher_arr, "olive")
-    if bfgs_arr.size:
+    if _has_positive_finite(bfgs_arr):
         _overlay_smooth(bfgs_arr, "navy")
-    if fd_arr.size:
+    if _has_positive_finite(fd_arr):
         _overlay_smooth(fd_arr, "cyan")
-    if kfac_arr.size:
+    if _has_positive_finite(kfac_arr):
         _overlay_smooth(kfac_arr, "darkgreen")
 
     ax.set_yscale("log")
@@ -435,6 +443,8 @@ def plot_all_spike_cooccurrences(
         y = np.asarray(history.get(key, []), dtype=float).ravel()
         if h.size == 0 or y.size == 0:
             continue
+        if not (_has_positive_finite(h) and _has_positive_finite(y)):
+            continue
         n = min(h.size, y.size)
         save_path = None
         if save_dir is not None:
@@ -501,8 +511,13 @@ def print_correlations(
         if mask.sum() < 3:
             print(f"  {label}: insufficient data")
             return
-        sp, _ = sp_stats.spearmanr(a[mask], b[mask])
-        pe, _ = sp_stats.pearsonr(a[mask], b[mask])
+        a_m = a[mask]
+        b_m = b[mask]
+        if np.std(a_m) < 1e-12 or np.std(b_m) < 1e-12:
+            print(f"  {label}: constant/near-constant series")
+            return
+        sp, _ = sp_stats.spearmanr(a_m, b_m)
+        pe, _ = sp_stats.pearsonr(a_m, b_m)
         print(f"  {label}: Spearman {sp:.4f} | Pearson {pe:.4f}")
 
     print(f"\n--- {name} Correlation Results ---")

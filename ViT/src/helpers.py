@@ -147,7 +147,7 @@ def get_curvature_metrics(
     loss: torch.Tensor,
     vv_mask: torch.Tensor,
     max_iter: int = 10,
-    compute_fd: bool = True,
+    compute_fd: bool = False,
 ) -> dict[str, float]:
     """
     Compute nine sharpness proxies for the current model state.
@@ -168,7 +168,8 @@ def get_curvature_metrics(
                        (O(ε²) accurate).
     * ``fd``         — λ_max(H) estimated via forward-difference finite diffs
                        (O(ε) accurate, half the cost of BFGS).
-                       Only computed when ``compute_fd=True``.
+                       Both ``bfgs`` and ``fd`` are only computed when
+                       ``compute_fd=True``.
     * ``diag_h``     — max(diag(H)), the largest diagonal entry of H,
                        estimated via the Bekas–Kokiopoulou–Saad
                        Hutchinson diagonal estimator with Rademacher
@@ -191,7 +192,8 @@ def get_curvature_metrics(
                     with ``create_graph=True`` or retain_graph available).
         vv_mask:    Output of ``get_VV_subspace_mask(model)``.
         max_iter:   Power-iteration steps.
-        compute_fd: Whether to compute the finite-difference proxy.
+        compute_fd: Whether to compute finite-difference proxies
+                (both ``bfgs`` and ``fd``).
 
     Returns:
         Dict with keys: ``hessian``, ``prec_h``, ``hessian_vv``,
@@ -444,62 +446,63 @@ def get_curvature_metrics(
     # Non-destructive: parameters are perturbed then restored.
     # ------------------------------------------------------------------ #
     bfgs_norm = 0.0
-    try:
-        eps_cd = 1e-4
-        v_b = torch.randn_like(flat_params)
-        v_b = v_b / (v_b.norm() + 1e-9)
-        flat_bv: torch.Tensor | None = None
+    if compute_fd:
+        try:
+            eps_cd = 1e-4
+            v_b = torch.randn_like(flat_params)
+            v_b = v_b / (v_b.norm() + 1e-9)
+            flat_bv: torch.Tensor | None = None
 
-        for _ in range(max_iter):
-            # ---- +ε perturbation ----
-            offset = 0
-            for p in params_vals:
-                numel = p.numel()
-                p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
-                offset += numel
+            for _ in range(max_iter):
+                # ---- +ε perturbation ----
+                offset = 0
+                for p in params_vals:
+                    numel = p.numel()
+                    p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
+                    offset += numel
 
+                optimizer.zero_grad()
+                loss_bp = F.cross_entropy(model(X), Y)
+                loss_bp.backward()
+                g_plus = torch.cat(
+                    [p.grad.reshape(-1).clone() for p in model.parameters()]
+                )
+
+                # ---- −ε perturbation  (shift by −2ε from current +ε state) ----
+                offset = 0
+                for p in params_vals:
+                    numel = p.numel()
+                    p.data.add_(-2.0 * eps_cd * v_b[offset : offset + numel].view_as(p))
+                    offset += numel
+
+                optimizer.zero_grad()
+                loss_bm = F.cross_entropy(model(X), Y)
+                loss_bm.backward()
+                g_minus = torch.cat(
+                    [p.grad.reshape(-1).clone() for p in model.parameters()]
+                )
+
+                # ---- Restore original parameters ----
+                offset = 0
+                for p in params_vals:
+                    numel = p.numel()
+                    p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
+                    offset += numel
+
+                flat_bv = (g_plus - g_minus) / (2.0 * eps_cd)
+                v_b = flat_bv / (flat_bv.norm() + 1e-9)
+
+                del g_plus, g_minus
+                torch.cuda.empty_cache()
+
+            bfgs_norm = torch.dot(v_b, flat_bv).item() if flat_bv is not None else 0.0
             optimizer.zero_grad()
-            loss_bp = F.cross_entropy(model(X), Y)
-            loss_bp.backward()
-            g_plus = torch.cat(
-                [p.grad.reshape(-1).clone() for p in model.parameters()]
-            )
-
-            # ---- −ε perturbation  (shift by −2ε from current +ε state) ----
-            offset = 0
-            for p in params_vals:
-                numel = p.numel()
-                p.data.add_(-2.0 * eps_cd * v_b[offset : offset + numel].view_as(p))
-                offset += numel
-
-            optimizer.zero_grad()
-            loss_bm = F.cross_entropy(model(X), Y)
-            loss_bm.backward()
-            g_minus = torch.cat(
-                [p.grad.reshape(-1).clone() for p in model.parameters()]
-            )
-
-            # ---- Restore original parameters ----
-            offset = 0
-            for p in params_vals:
-                numel = p.numel()
-                p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
-                offset += numel
-
-            flat_bv = (g_plus - g_minus) / (2.0 * eps_cd)
-            v_b = flat_bv / (flat_bv.norm() + 1e-9)
-
-            del g_plus, g_minus
-            torch.cuda.empty_cache()
-
-        bfgs_norm = torch.dot(v_b, flat_bv).item() if flat_bv is not None else 0.0
-        optimizer.zero_grad()
-        del v_b
-        if flat_bv is not None:
-            del flat_bv
-    except Exception:
-        pass
-    torch.cuda.empty_cache()
+            del v_b
+            if flat_bv is not None:
+                del flat_bv
+        except Exception:
+            pass
+        torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
     # 8. K-FAC Proxy  (Kronecker-Factored Approximate Curvature)
