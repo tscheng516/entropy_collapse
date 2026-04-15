@@ -785,12 +785,16 @@ if not use_ddp or rank == 0:
     )
 
     # --- Unified raw + smoothed correlation analysis ---
-    print_correlations(history, "Run", lam=100.0, include_smooth=True)
+    print_correlations(
+        history, "Run", lam=100.0, include_smooth=True,
+        hessian_freq=cfg.hessian_freq,
+    )
 
     fig = plot_training_dynamics(
         histories={"Run": history},
         lrs={"Run": cfg.learning_rate},
         save_path=os.path.join(run_out_dir, "training_dynamics.png"),
+        entropy_freq=cfg.entropy_freq,
     )
     plt.close(fig)
     print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
@@ -800,6 +804,7 @@ if not use_ddp or rank == 0:
         history,
         lam=100.0,
         save_path=os.path.join(run_out_dir, "curvature_smoothed_comparison.png"),
+        hessian_freq=cfg.hessian_freq,
     )
     plt.close(fig_smooth)
     print(f"[plot] smoothed curvature comparison → {os.path.join(run_out_dir, 'curvature_smoothed_comparison.png')}")
@@ -821,6 +826,7 @@ if not use_ddp or rank == 0:
             z_score=z,
             log_scale=True,
             save_dir=run_out_dir,
+            hessian_freq=cfg.hessian_freq,
         )
         for fig_spike in spike_figs.values():
             plt.close(fig_spike)

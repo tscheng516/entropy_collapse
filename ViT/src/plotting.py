@@ -72,6 +72,26 @@ def _has_positive_finite(arr: np.ndarray | list) -> bool:
     return bool(np.any(np.isfinite(a) & (a > 0)))
 
 
+def _extract_positive(series: np.ndarray | list) -> tuple[np.ndarray, np.ndarray]:
+    """Extract positive finite values and their original indices."""
+    arr = np.asarray(series, dtype=float).ravel()
+    if arr.size == 0:
+        return np.array([]), np.array([], dtype=int)
+    valid = np.isfinite(arr) & (arr > 0)
+    indices = np.where(valid)[0]
+    return arr[valid], indices
+
+
+def _extract_positive_2d(matrix: np.ndarray | list) -> tuple[np.ndarray, np.ndarray]:
+    """Extract rows where any column has a positive finite value."""
+    arr = np.asarray(matrix, dtype=float)
+    if arr.ndim != 2 or arr.size == 0:
+        return arr, np.arange(max(len(arr), 0), dtype=int)
+    valid_rows = np.any(np.isfinite(arr) & (arr > 0), axis=1)
+    indices = np.where(valid_rows)[0]
+    return arr[valid_rows], indices
+
+
 # ======================================================================
 # Curvature metrics — raw vs smoothed comparison
 # ======================================================================
@@ -81,6 +101,8 @@ def plot_curvature_smoothed_comparison(
     history: dict,
     lam: float = 100.0,
     save_path: str | None = None,
+    skip_intv: bool = True,
+    hessian_freq: int = 1,
 ) -> plt.Figure:
     """
     Plot all nine spectral-norm curvature metrics (raw + smoothed) side-by-side.
@@ -101,9 +123,14 @@ def plot_curvature_smoothed_comparison(
       * kfac — K-FAC proxy
 
     Args:
-        history:   Training history dict with curvature metric keys.
-        lam:       Smoothing strength for ``smooth_log_trend``.
-        save_path: If provided, save the figure to this path.
+        history:      Training history dict with curvature metric keys.
+        lam:          Smoothing strength for ``smooth_log_trend``.
+        save_path:    If provided, save the figure to this path.
+        skip_intv:    If True (default), skip zero-placeholder intervals and
+                      plot only actually-measured values against their true
+                      iteration indices.  If False, use the legacy
+                      ``_carry_forward_positive`` step-function fill.
+        hessian_freq: Hessian computation frequency (used for x-axis label).
 
     Returns:
         The matplotlib ``Figure`` object.
@@ -119,84 +146,94 @@ def plot_curvature_smoothed_comparison(
             return arr.reshape(-1)
         return arr.ravel()
 
-    # --- Plot all nine metrics (raw + smoothed) ---
-    h_arr = _carry_forward_positive(_as1d("hessian"))
-    ax.plot(h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
+    def _prep(key):
+        """Return (values, x_indices) depending on skip_intv mode."""
+        raw = _as1d(key)
+        if skip_intv:
+            return _extract_positive(raw)
+        else:
+            vals = _carry_forward_positive(raw)
+            return vals, np.arange(len(vals))
 
-    prec_arr = _carry_forward_positive(_as1d("prec_h"))
+    # --- Plot all nine metrics (raw + smoothed) ---
+    h_arr, h_idx = _prep("hessian")
+    if _has_positive_finite(h_arr):
+        ax.plot(h_idx, h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
+
+    prec_arr, prec_idx = _prep("prec_h")
     if _has_positive_finite(prec_arr):
         ax.plot(
-            prec_arr,
+            prec_idx, prec_arr,
             color="purple",
             linestyle="--",
             linewidth=2,
             label=r"Precond. Hessian ($\tilde{H}$)",
         )
 
-    gn_arr = _carry_forward_positive(_as1d("gn"))
+    gn_arr, gn_idx = _prep("gn")
     if _has_positive_finite(gn_arr):
         ax.plot(
-            gn_arr,
+            gn_idx, gn_arr,
             color="brown",
             linestyle="--",
             linewidth=2,
             label=r"Gauss-Newton ($H^{GN}$)",
         )
 
-    vv_arr = _carry_forward_positive(_as1d("hessian_vv"))
+    vv_arr, vv_idx = _prep("hessian_vv")
     if _has_positive_finite(vv_arr):
         ax.plot(
-            vv_arr,
+            vv_idx, vv_arr,
             color="magenta",
             linestyle=":",
             linewidth=2,
             label=r"Value Subspace ($H_{VV}$)",
         )
 
-    diag_arr = _carry_forward_positive(_as1d("diag_h"))
+    diag_arr, diag_idx = _prep("diag_h")
     if _has_positive_finite(diag_arr):
         ax.plot(
-            diag_arr,
+            diag_idx, diag_arr,
             color="teal",
             linestyle="-.",
             linewidth=2,
             label="Diag Hessian",
         )
 
-    fisher_arr = _carry_forward_positive(_as1d("fisher"))
+    fisher_arr, fisher_idx = _prep("fisher")
     if _has_positive_finite(fisher_arr):
         ax.plot(
-            fisher_arr,
+            fisher_idx, fisher_arr,
             color="olive",
             linestyle="-.",
             linewidth=2,
             label="Empirical Fisher",
         )
 
-    bfgs_arr = _carry_forward_positive(_as1d("bfgs"))
+    bfgs_arr, bfgs_idx = _prep("bfgs")
     if _has_positive_finite(bfgs_arr):
         ax.plot(
-            bfgs_arr,
+            bfgs_idx, bfgs_arr,
             color="navy",
             linestyle=":",
             linewidth=2,
             label="BFGS",
         )
 
-    fd_arr = _carry_forward_positive(_as1d("fd"))
+    fd_arr, fd_idx = _prep("fd")
     if _has_positive_finite(fd_arr):
         ax.plot(
-            fd_arr,
+            fd_idx, fd_arr,
             color="cyan",
             linestyle="-.",
             linewidth=2,
             label="FD",
         )
 
-    kfac_arr = _carry_forward_positive(_as1d("kfac"))
+    kfac_arr, kfac_idx = _prep("kfac")
     if _has_positive_finite(kfac_arr):
         ax.plot(
-            kfac_arr,
+            kfac_idx, kfac_arr,
             color="darkgreen",
             linestyle=":",
             linewidth=2,
@@ -208,32 +245,34 @@ def plot_curvature_smoothed_comparison(
     _smooth_alpha = 0.45
     _smooth_lw = 5
 
-    def _overlay_smooth(arr, color):
+    def _overlay_smooth(arr, idx, color):
         if arr.size >= 3:
             trend, _, _ = smooth_log_trend(arr, lam=_smooth_lam, use_abs=True)
-            ax.plot(trend, color=color, linewidth=_smooth_lw, alpha=_smooth_alpha)
+            ax.plot(idx, trend, color=color, linewidth=_smooth_lw, alpha=_smooth_alpha)
 
-    _overlay_smooth(h_arr, "red")
+    if _has_positive_finite(h_arr):
+        _overlay_smooth(h_arr, h_idx, "red")
     if _has_positive_finite(prec_arr):
-        _overlay_smooth(prec_arr, "purple")
+        _overlay_smooth(prec_arr, prec_idx, "purple")
     if _has_positive_finite(gn_arr):
-        _overlay_smooth(gn_arr, "brown")
+        _overlay_smooth(gn_arr, gn_idx, "brown")
     if _has_positive_finite(vv_arr):
-        _overlay_smooth(vv_arr, "magenta")
+        _overlay_smooth(vv_arr, vv_idx, "magenta")
     if _has_positive_finite(diag_arr):
-        _overlay_smooth(diag_arr, "teal")
+        _overlay_smooth(diag_arr, diag_idx, "teal")
     if _has_positive_finite(fisher_arr):
-        _overlay_smooth(fisher_arr, "olive")
+        _overlay_smooth(fisher_arr, fisher_idx, "olive")
     if _has_positive_finite(bfgs_arr):
-        _overlay_smooth(bfgs_arr, "navy")
+        _overlay_smooth(bfgs_arr, bfgs_idx, "navy")
     if _has_positive_finite(fd_arr):
-        _overlay_smooth(fd_arr, "cyan")
+        _overlay_smooth(fd_arr, fd_idx, "cyan")
     if _has_positive_finite(kfac_arr):
-        _overlay_smooth(kfac_arr, "darkgreen")
+        _overlay_smooth(kfac_arr, kfac_idx, "darkgreen")
 
     ax.set_yscale("log")
     ax.set_title(f"All Curvature Metrics (λ_max) — Raw vs Smoothed (λ={lam})", fontsize=13)
-    ax.set_xlabel("Iteration", fontsize=12)
+    _xlabel = f"Iteration (every {hessian_freq})" if skip_intv and hessian_freq > 1 else "Iteration"
+    ax.set_xlabel(_xlabel, fontsize=12)
     ax.set_ylabel("Spectral Norm (λ_max)", fontsize=12)
     ax.legend(fontsize="small", loc="best")
     ax.grid(True, alpha=0.3, linestyle="--")
@@ -417,14 +456,29 @@ def plot_all_spike_cooccurrences(
     z_score: float = 2.0,
     log_scale: bool = True,
     save_dir: str | None = None,
+    skip_intv: bool = True,
+    hessian_freq: int = 1,
 ) -> tuple[dict[str, plt.Figure], dict[str, dict]]:
     """
     Compute MAD spike co-occurrence for lambda_max(H) versus each of the
     other eight curvature proxies.
 
+    Args:
+        skip_intv:    If True (default), extract only actually-measured
+                      values (positive & finite) before spike detection.
+                      If False, pass the full raw arrays (zeros included);
+                      ``plot_spike_cooccurrence`` already filters
+                      zero-placeholder pairs internally.
+        hessian_freq: Hessian computation frequency (informational).
+
     Returns figures/results keyed by proxy name.
     """
-    h = np.asarray(history.get("hessian", []), dtype=float).ravel()
+    h_raw = np.asarray(history.get("hessian", []), dtype=float).ravel()
+    if skip_intv:
+        h, h_idx = _extract_positive(h_raw)
+    else:
+        h = h_raw
+        h_idx = np.arange(len(h))
     proxy_specs = [
         ("prec_h", "Prec_H", "hessian_prec"),
         ("hessian_vv", "H_VV", "hessian_vv"),
@@ -440,7 +494,11 @@ def plot_all_spike_cooccurrences(
     results: dict[str, dict] = {}
 
     for key, label, suffix in proxy_specs:
-        y = np.asarray(history.get(key, []), dtype=float).ravel()
+        y_raw = np.asarray(history.get(key, []), dtype=float).ravel()
+        if skip_intv:
+            y, y_idx = _extract_positive(y_raw)
+        else:
+            y = y_raw
         if h.size == 0 or y.size == 0:
             continue
         if not (_has_positive_finite(h) and _has_positive_finite(y)):
@@ -477,6 +535,8 @@ def print_correlations(
     sample_every: int = 1,
     lam: float = 100.0,
     include_smooth: bool = True,
+    skip_intv: bool = True,
+    hessian_freq: int = 1,
 ) -> None:
     """
     Print raw and (optionally) smoothed correlations for curvature metrics.
@@ -489,11 +549,19 @@ def print_correlations(
         sample_every: Subsample stride (e.g. 3 if metrics were recorded
                       every 3rd iteration, matching the notebook's
                       ``[::3]`` slicing).
+        skip_intv:    If True (default), extract only positive finite values
+                      before computing correlations.  If False, use the full
+                      arrays (legacy behavior with zeros between measurements).
+        hessian_freq: Hessian computation frequency (informational).
     """
     def _gk(d, *keys):
         for k in keys:
             if k in d:
-                return np.array(d[k][::sample_every])
+                raw = np.array(d[k])
+                if skip_intv:
+                    vals, _ = _extract_positive(raw)
+                    return vals[::sample_every]
+                return raw[::sample_every]
         return np.asarray([])
 
     h = _gk(history, "hessian")
@@ -604,6 +672,8 @@ def plot_training_dynamics(
     histories: dict[str, dict],
     lrs: dict[str, float],
     save_path: str | None = None,
+    skip_intv: bool = True,
+    entropy_freq: int = 1,
 ) -> plt.Figure:
     """
         Plot compact training dynamics for one or two runs.
@@ -613,13 +683,18 @@ def plot_training_dynamics(
             * per-layer attention entropy
 
     Args:
-        histories:  Dict mapping optimizer name (e.g. ``"AdamW"``) to a
-                    history dict with keys: ``loss``, ``val_loss``,
-                    and ``entropy``.
-                    ``entropy`` values are lists of per-layer floats.
-        lrs:        Dict mapping optimizer name to the peak LR used
-                    (kept for API compatibility).
-        save_path:  If provided, save the figure to this path.
+        histories:    Dict mapping optimizer name (e.g. ``"AdamW"``) to a
+                      history dict with keys: ``loss``, ``val_loss``,
+                      and ``entropy``.
+                      ``entropy`` values are lists of per-layer floats.
+        lrs:          Dict mapping optimizer name to the peak LR used
+                      (kept for API compatibility).
+        save_path:    If provided, save the figure to this path.
+        skip_intv:    If True (default), skip zero-placeholder rows in the
+                      entropy matrix and plot only actually-measured values
+                      against their true iteration indices.  If False, use
+                      the legacy ``_carry_forward_positive_2d`` fill.
+        entropy_freq: Entropy computation frequency (used for x-axis label).
 
     Returns:
         The matplotlib ``Figure`` object.
@@ -666,18 +741,25 @@ def plot_training_dynamics(
 
         # --- Col 1: per-layer attention entropy ---
         ax_ent = axs[row, 1]
-        entropies = _carry_forward_positive_2d(np.array(h.get("entropy", [])))
+        raw_entropy = np.array(h.get("entropy", []))
+        if skip_intv:
+            entropies, ent_idx = _extract_positive_2d(raw_entropy)
+        else:
+            entropies = _carry_forward_positive_2d(raw_entropy)
+            ent_idx = np.arange(len(entropies))
         if entropies.ndim == 2 and entropies.shape[1] > 0:
             n_layers = entropies.shape[1]
             colors_entropy = plt.cm.viridis(np.linspace(0, 1, n_layers))
             for layer_idx in range(n_layers):
                 ax_ent.plot(
+                    ent_idx,
                     entropies[:, layer_idx],
                     color=colors_entropy[layer_idx],
                     label=f"Layer {layer_idx + 1}",
                 )
         ax_ent.set_title(f"{name} Attention Entropy (Per Layer)")
-        ax_ent.set_xlabel("Iteration")
+        _ent_xlabel = f"Iteration (every {entropy_freq})" if skip_intv and entropy_freq > 1 else "Iteration"
+        ax_ent.set_xlabel(_ent_xlabel)
         ax_ent.set_ylabel("Entropy (nats)")
         ax_ent.legend(fontsize="small", ncol=2)
         ax_ent.grid(True, alpha=0.25, linestyle="--")
