@@ -103,6 +103,7 @@ def plot_curvature_smoothed_comparison(
     save_path: str | None = None,
     skip_intv: bool = True,
     hessian_freq: int = 1,
+    compute_fd: bool = False,
 ) -> plt.Figure:
     """
     Plot all nine spectral-norm curvature metrics (raw + smoothed) side-by-side.
@@ -116,8 +117,8 @@ def plot_curvature_smoothed_comparison(
       * prec_h — Adam-preconditioned Hessian
       * hessian_vv (H_VV) — value-projection subspace
       * gn — Gauss-Newton
-      * bfgs — central-difference FD
-      * fd — forward-difference FD
+      * bfgs — central-difference FD (only when compute_fd=True)
+      * fd — forward-difference FD (only when compute_fd=True)
       * diag_h — max diagonal Hessian
       * fisher — empirical Fisher
       * kfac — K-FAC proxy
@@ -131,6 +132,9 @@ def plot_curvature_smoothed_comparison(
                       iteration indices.  If False, use the legacy
                       ``_carry_forward_positive`` step-function fill.
         hessian_freq: Hessian computation frequency (used for x-axis label).
+        compute_fd:   If False (default), skip BFGS and FD metrics entirely.
+                      Set to True only if the training run had compute_fd
+                      enabled in its TrainConfig.
 
     Returns:
         The matplotlib ``Figure`` object.
@@ -210,25 +214,33 @@ def plot_curvature_smoothed_comparison(
             label="Empirical Fisher",
         )
 
-    bfgs_arr, bfgs_idx = _prep("bfgs")
-    if _has_positive_finite(bfgs_arr):
-        ax.plot(
-            bfgs_idx, bfgs_arr,
-            color="navy",
-            linestyle=":",
-            linewidth=2,
-            label="BFGS",
-        )
+    if compute_fd:
+        bfgs_arr, bfgs_idx = _prep("bfgs")
+        if _has_positive_finite(bfgs_arr):
+            ax.plot(
+                bfgs_idx, bfgs_arr,
+                color="navy",
+                linestyle=":",
+                linewidth=2,
+                label="BFGS",
+            )
+        elif _has_positive_finite(_as1d("bfgs")):
+            print("[warn] compute_fd=True but BFGS data has no positive values — was compute_fd enabled during training?")
 
-    fd_arr, fd_idx = _prep("fd")
-    if _has_positive_finite(fd_arr):
-        ax.plot(
-            fd_idx, fd_arr,
-            color="cyan",
-            linestyle="-.",
-            linewidth=2,
-            label="FD",
-        )
+        fd_arr, fd_idx = _prep("fd")
+        if _has_positive_finite(fd_arr):
+            ax.plot(
+                fd_idx, fd_arr,
+                color="cyan",
+                linestyle="-.",
+                linewidth=2,
+                label="FD",
+            )
+        elif _has_positive_finite(_as1d("fd")):
+            print("[warn] compute_fd=True but FD data has no positive values — was compute_fd enabled during training?")
+    else:
+        bfgs_arr, bfgs_idx = np.array([]), np.array([], dtype=int)
+        fd_arr, fd_idx = np.array([]), np.array([], dtype=int)
 
     kfac_arr, kfac_idx = _prep("kfac")
     if _has_positive_finite(kfac_arr):
@@ -262,9 +274,9 @@ def plot_curvature_smoothed_comparison(
         _overlay_smooth(diag_arr, diag_idx, "teal")
     if _has_positive_finite(fisher_arr):
         _overlay_smooth(fisher_arr, fisher_idx, "olive")
-    if _has_positive_finite(bfgs_arr):
+    if compute_fd and _has_positive_finite(bfgs_arr):
         _overlay_smooth(bfgs_arr, bfgs_idx, "navy")
-    if _has_positive_finite(fd_arr):
+    if compute_fd and _has_positive_finite(fd_arr):
         _overlay_smooth(fd_arr, fd_idx, "cyan")
     if _has_positive_finite(kfac_arr):
         _overlay_smooth(kfac_arr, kfac_idx, "darkgreen")
@@ -458,10 +470,11 @@ def plot_all_spike_cooccurrences(
     save_dir: str | None = None,
     skip_intv: bool = True,
     hessian_freq: int = 1,
+    compute_fd: bool = False,
 ) -> tuple[dict[str, plt.Figure], dict[str, dict]]:
     """
     Compute MAD spike co-occurrence for lambda_max(H) versus each of the
-    other eight curvature proxies.
+    other curvature proxies.
 
     Args:
         skip_intv:    If True (default), extract only actually-measured
@@ -470,6 +483,7 @@ def plot_all_spike_cooccurrences(
                       ``plot_spike_cooccurrence`` already filters
                       zero-placeholder pairs internally.
         hessian_freq: Hessian computation frequency (informational).
+        compute_fd:   If False (default), skip BFGS and FD proxies.
 
     Returns figures/results keyed by proxy name.
     """
@@ -483,12 +497,15 @@ def plot_all_spike_cooccurrences(
         ("prec_h", "Prec_H", "hessian_prec"),
         ("hessian_vv", "H_VV", "hessian_vv"),
         ("gn", "GN", "hessian_gn"),
-        ("fd", "FD", "hessian_fd"),
         ("diag_h", "Diag_H", "hessian_diag"),
         ("fisher", "Fisher", "hessian_fisher"),
-        ("bfgs", "BFGS", "hessian_bfgs"),
         ("kfac", "KFAC", "hessian_kfac"),
     ]
+    if compute_fd:
+        proxy_specs.extend([
+            ("fd", "FD", "hessian_fd"),
+            ("bfgs", "BFGS", "hessian_bfgs"),
+        ])
 
     figs: dict[str, plt.Figure] = {}
     results: dict[str, dict] = {}
@@ -537,6 +554,7 @@ def print_correlations(
     include_smooth: bool = True,
     skip_intv: bool = True,
     hessian_freq: int = 1,
+    compute_fd: bool = False,
 ) -> None:
     """
     Print raw and (optionally) smoothed correlations for curvature metrics.
@@ -553,6 +571,7 @@ def print_correlations(
                       before computing correlations.  If False, use the full
                       arrays (legacy behavior with zeros between measurements).
         hessian_freq: Hessian computation frequency (informational).
+        compute_fd:   If False (default), skip BFGS and FD correlations.
     """
     def _gk(d, *keys):
         for k in keys:
@@ -568,11 +587,14 @@ def print_correlations(
     prec_h = _gk(history, "prec_h")
     vv = _gk(history, "hessian_vv", "vv")
     gn = _gk(history, "gn")
-    fd = _gk(history, "fd")
     diag_h = _gk(history, "diag_h")
     fisher = _gk(history, "fisher")
-    bfgs = _gk(history, "bfgs")
     kfac = _gk(history, "kfac")
+    if compute_fd:
+        fd = _gk(history, "fd")
+        bfgs = _gk(history, "bfgs")
+        if not _has_positive_finite(fd) and not _has_positive_finite(bfgs):
+            print("[warn] compute_fd=True but FD/BFGS data has no positive values — was compute_fd enabled during training?")
 
     def _corr(a, b, label):
         mask = np.isfinite(a) & np.isfinite(b)
@@ -592,11 +614,12 @@ def print_correlations(
     _corr(h, prec_h,  "H vs Prec_H ")
     _corr(h, vv,      "H vs H_VV   ")
     _corr(h, gn,      "H vs GN     ")
-    _corr(h, fd,      "H vs FD     ")
     _corr(h, diag_h,  "H vs Diag_H ")
     _corr(h, fisher,  "H vs Fisher ")
-    _corr(h, bfgs,    "H vs BFGS   ")
     _corr(h, kfac,    "H vs KFAC   ")
+    if compute_fd:
+        _corr(h, fd,      "H vs FD     ")
+        _corr(h, bfgs,    "H vs BFGS   ")
 
     if not include_smooth:
         return
@@ -611,21 +634,22 @@ def print_correlations(
     prec_h_s = _smooth(prec_h)
     vv_s = _smooth(vv)
     gn_s = _smooth(gn)
-    fd_s = _smooth(fd)
     diag_h_s = _smooth(diag_h)
     fisher_s = _smooth(fisher)
-    bfgs_s = _smooth(bfgs)
     kfac_s = _smooth(kfac)
 
     print(f"\n--- {name} Smoothed Correlation Results (λ={lam}) ---")
     _corr(h_s, prec_h_s, "H vs Prec_H ")
     _corr(h_s, vv_s,     "H vs H_VV   ")
     _corr(h_s, gn_s,     "H vs GN     ")
-    _corr(h_s, fd_s,     "H vs FD     ")
     _corr(h_s, diag_h_s, "H vs Diag_H ")
     _corr(h_s, fisher_s, "H vs Fisher ")
-    _corr(h_s, bfgs_s,   "H vs BFGS   ")
     _corr(h_s, kfac_s,   "H vs KFAC   ")
+    if compute_fd:
+        fd_s = _smooth(fd)
+        bfgs_s = _smooth(bfgs)
+        _corr(h_s, fd_s,     "H vs FD     ")
+        _corr(h_s, bfgs_s,   "H vs BFGS   ")
 
     # raw_ent = history.get("entropy", [])
     # if raw_ent and len(raw_ent) > 0:

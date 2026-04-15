@@ -788,6 +788,7 @@ if not use_ddp or rank == 0:
     print_correlations(
         history, "Run", lam=100.0, include_smooth=True,
         hessian_freq=cfg.hessian_freq,
+        compute_fd=cfg.compute_fd,
     )
 
     fig = plot_training_dynamics(
@@ -805,6 +806,7 @@ if not use_ddp or rank == 0:
         lam=100.0,
         save_path=os.path.join(run_out_dir, "curvature_smoothed_comparison.png"),
         hessian_freq=cfg.hessian_freq,
+        compute_fd=cfg.compute_fd,
     )
     plt.close(fig_smooth)
     print(f"[plot] smoothed curvature comparison → {os.path.join(run_out_dir, 'curvature_smoothed_comparison.png')}")
@@ -827,6 +829,7 @@ if not use_ddp or rank == 0:
             log_scale=True,
             save_dir=run_out_dir,
             hessian_freq=cfg.hessian_freq,
+            compute_fd=cfg.compute_fd,
         )
         for fig_spike in spike_figs.values():
             plt.close(fig_spike)

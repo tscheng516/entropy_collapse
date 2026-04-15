@@ -76,6 +76,7 @@ def plot_history(
     entropy_freq: int = 500,
     skip_intv: bool = True,
     lam: float = 100.0,
+    compute_fd: bool = False,
 ) -> None:
     """
     Load a ``history.pkl`` and reproduce every post-training plot and
@@ -93,6 +94,8 @@ def plot_history(
         skip_intv:    If True (default), use the new interval-skipping mode.
                       If False, use legacy carry-forward step-function.
         lam:          Smoothing strength for Whittaker–Henderson smoother.
+        compute_fd:   If True, include BFGS and FD metrics in plots and
+                      analysis.  Should match the value used during training.
     """
     # --- Load history ---
     with open(pkl_path, "rb") as f:
@@ -113,6 +116,7 @@ def plot_history(
         print_correlations(
             history, "Run", lam=lam, include_smooth=True,
             skip_intv=skip_intv, hessian_freq=hessian_freq,
+            compute_fd=compute_fd,
         )
 
         # --- Training dynamics (loss + entropy) ---
@@ -135,6 +139,7 @@ def plot_history(
             save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
             skip_intv=skip_intv,
             hessian_freq=hessian_freq,
+            compute_fd=compute_fd,
         )
         plt.close(fig_smooth)
         print(f"[plot] smoothed curvature comparison → {os.path.join(out_dir, 'curvature_smoothed_comparison.png')}")
@@ -159,6 +164,7 @@ def plot_history(
                 save_dir=out_dir,
                 skip_intv=skip_intv,
                 hessian_freq=hessian_freq,
+                compute_fd=compute_fd,
             )
             for fig_spike in spike_figs.values():
                 plt.close(fig_spike)
@@ -207,6 +213,10 @@ def main():
         "--lam", type=float, default=100.0,
         help="Smoothing strength for Whittaker–Henderson smoother (default: 100)",
     )
+    parser.add_argument(
+        "--compute-fd", action="store_true",
+        help="Include BFGS and FD metrics (only if they were computed during training)",
+    )
     args = parser.parse_args()
 
     plot_history(
@@ -216,6 +226,7 @@ def main():
         entropy_freq=args.entropy_freq,
         skip_intv=not args.no_skip_intv,
         lam=args.lam,
+        compute_fd=args.compute_fd,
     )
 
 
