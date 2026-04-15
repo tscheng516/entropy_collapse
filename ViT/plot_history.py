@@ -17,7 +17,7 @@ Specify an output directory::
 
 Override hessian/entropy frequencies (defaults: 500)::
 
-    python plot_history.py path/to/history.pkl --hessian_freq 100 --entropy_freq 100
+    python plot_history.py out/cifar100_vitb16/20260414-212042/history.pkl --hessian_freq 100 --entropy_freq 100
 
 Use legacy carry-forward mode::
 
