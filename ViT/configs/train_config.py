@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+import time
 
 
 _DATASET_DEFAULTS: dict[str, dict[str, int]] = {
@@ -309,7 +310,8 @@ class ViTBaseCIFAR100Config(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/cifar100_vitb16"
-    wandb_run_name: str = "cifar100_vitb16"
+    wandb_project: str = "entropy-collapse-cifar100_vitb16"
+    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
 @dataclass
@@ -362,7 +364,8 @@ class ViTBaseImageNet1kConfig(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k_vitb16"
-    wandb_run_name: str = "imagenet1k_vitb16"
+    wandb_project: str = "entropy-collapse-imagenet1k_vitb16"
+    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
 @dataclass
@@ -423,7 +426,8 @@ class ViTCurrentImageNet1kConfig(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k_current"
-    wandb_run_name: str = "imagenet1k_current"
+    wandb_project: str = "entropy-collapse-imagenet1k_current"
+    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
 # Registry mapping preset names to config classes.  Add entries here to

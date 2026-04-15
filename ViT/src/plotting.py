@@ -559,24 +559,24 @@ def print_correlations(
     _corr(h_s, bfgs_s,   "H vs BFGS   ")
     _corr(h_s, kfac_s,   "H vs KFAC   ")
 
-    raw_ent = history.get("entropy", [])
-    if raw_ent and len(raw_ent) > 0:
-        ent_arr = np.array(raw_ent[::sample_every])
-        if ent_arr.ndim == 2 and ent_arr.shape[1] > 0:
-            ent_first = ent_arr[:, 0]
-            ent_avg = ent_arr.mean(axis=1)
-        else:
-            ent_first = ent_avg = np.asarray([])
-    else:
-        ent_first = ent_avg = np.asarray([])
+    # raw_ent = history.get("entropy", [])
+    # if raw_ent and len(raw_ent) > 0:
+    #     ent_arr = np.array(raw_ent[::sample_every])
+    #     if ent_arr.ndim == 2 and ent_arr.shape[1] > 0:
+    #         ent_first = ent_arr[:, 0]
+    #         ent_avg = ent_arr.mean(axis=1)
+    #     else:
+    #         ent_first = ent_avg = np.asarray([])
+    # else:
+    #     ent_first = ent_avg = np.asarray([])
 
-    if ent_first.size >= 3 and h_s.size >= 3:
-        n = min(len(h_s), len(ent_first))
-        print(f"\n--- {name} Smoothed Proxy vs Entropy (λ={lam}) ---")
-        _corr(h_s[:n],      ent_first[:n], "H vs Entropy(L0) ")
-        _corr(h_s[:n],      ent_avg[:n],   "H vs Entropy(avg)")
-        _corr(vv_s[:n],     ent_first[:n], "H_VV vs Entropy  ")
-        _corr(prec_h_s[:n], ent_first[:n], "Prec_H vs Entropy")
+    # if ent_first.size >= 3 and h_s.size >= 3:
+    #     n = min(len(h_s), len(ent_first))
+    #     print(f"\n--- {name} Smoothed Proxy vs Entropy (λ={lam}) ---")
+    #     _corr(h_s[:n],      ent_first[:n], "H vs Entropy(L0) ")
+    #     _corr(h_s[:n],      ent_avg[:n],   "H vs Entropy(avg)")
+    #     _corr(vv_s[:n],     ent_first[:n], "H_VV vs Entropy  ")
+    #     _corr(prec_h_s[:n], ent_first[:n], "Prec_H vs Entropy")
 
 
 def print_smooth_correlations(
