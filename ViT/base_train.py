@@ -64,9 +64,6 @@ import time
 import pickle
 from contextlib import nullcontext
 
-import matplotlib
-matplotlib.use("Agg")  # non-interactive backend for headless servers
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -777,66 +774,14 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from src.plotting import (  # noqa: E402
-        plot_training_dynamics,
-        plot_all_spike_cooccurrences,
-        plot_curvature_smoothed_comparison,
-        print_correlations,
-    )
+    from plot_history import plot_history  # noqa: E402
 
-    # --- Unified raw + smoothed correlation analysis ---
-    print_correlations(
-        history, "Run", lam=100.0, include_smooth=True,
+    plot_history(
+        pkl_path=history_path,
+        out_dir=run_out_dir,
         hessian_freq=cfg.hessian_freq,
-        compute_fd=cfg.compute_fd,
-    )
-
-    fig = plot_training_dynamics(
-        histories={"Run": history},
-        lrs={"Run": cfg.learning_rate},
-        save_path=os.path.join(run_out_dir, "training_dynamics.png"),
         entropy_freq=cfg.entropy_freq,
-    )
-    plt.close(fig)
-    print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
-
-    # --- Smoothed curvature metrics comparison ---
-    fig_smooth = plot_curvature_smoothed_comparison(
-        history,
+        skip_intv=True,
         lam=100.0,
-        save_path=os.path.join(run_out_dir, "curvature_smoothed_comparison.png"),
-        hessian_freq=cfg.hessian_freq,
         compute_fd=cfg.compute_fd,
     )
-    plt.close(fig_smooth)
-    print(f"[plot] smoothed curvature comparison → {os.path.join(run_out_dir, 'curvature_smoothed_comparison.png')}")
-
-    proxy_label = {
-        "prec_h": "Prec_H",
-        "hessian_vv": "H_VV",
-        "gn": "GN",
-        "fd": "FD",
-        "diag_h": "Diag_H",
-        "fisher": "Fisher",
-        "bfgs": "BFGS",
-        "kfac": "KFAC",
-    }
-    for z in (1.5, 2):
-        spike_figs, spike_results = plot_all_spike_cooccurrences(
-            history,
-            window=15,
-            z_score=z,
-            log_scale=True,
-            save_dir=run_out_dir,
-            hessian_freq=cfg.hessian_freq,
-            compute_fd=cfg.compute_fd,
-        )
-        for fig_spike in spike_figs.values():
-            plt.close(fig_spike)
-
-        for key, res in spike_results.items():
-            label = proxy_label.get(key, key)
-            print(
-                f"[plot] z={z} spike co-occurrence: "
-                f"P({label} spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}"
-            )
