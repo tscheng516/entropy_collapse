@@ -27,31 +27,18 @@ Default config (CIFAR-10, ViT-Small/16, AdamW)::
 Override individual flags::
 
     python base_train.py --lr 5e-4 --optim sgd --max_it 2000
+    
+or with torchrun::
+
+    torchrun --nproc_per_node=4 base_train.py \\
+        dataset=imagenet data_dir=/data/imagenet num_classes=1000 \\
+        --wandb true --lr 1e-3 --max_it 5000
 
 The override syntax is identical to NanoGPT's ``configurator.py`` convention:
 any ``key=value`` argument is ``ast.literal_eval``'d and injected into the
 config dataclass.  For argparse-style flags, use short names such as
 ``--cp``, ``--optim``, ``--lr``, ``--max_it``, ``--wandb``, and ``--z``.
 
-Setup
------
-1. Install dependencies::
-
-    pip install -r requirements.txt
-
-2. Run from the repo root::
-
-    python base_train.py
-
-   or with torchrun::
-
-    torchrun --nproc_per_node=4 base_train.py \\
-        dataset=imagenet data_dir=/data/imagenet num_classes=1000 \\
-        --wandb true --lr 1e-3 --max_it 5000
-
-Note: CIFAR-10 images are 32×32 but are up-sampled to 224×224 by the
-data pipeline so the same ViT-Small/16 architecture can be used for a
-lightweight pilot without any model changes.
 """
 
 from __future__ import annotations
@@ -85,7 +72,7 @@ if _SCRIPT_DIR not in sys.path:
 # ---------------------------------------------------------------------------
 # 1.  Default configuration (loaded from dataclass, then CLI overrides)
 # ---------------------------------------------------------------------------
-from configs.train_config import TrainConfig, CONFIGS  # noqa: E402
+from configs.train_config import TrainConfig, CONFIGS  
 
 # Allow ``config=<preset>`` as a CLI argument to select a named config class
 # before the dataclass is instantiated.  This must be parsed first so that
@@ -276,7 +263,7 @@ if rank == 0:
 # ---------------------------------------------------------------------------
 # 3.  Data
 # ---------------------------------------------------------------------------
-from src.data_utils import load_data, infinite_loader  # noqa: E402
+from src.data_utils import load_data, infinite_loader  
 
 train_loader, val_loader = load_data(
     dataset=cfg.dataset,
@@ -297,7 +284,7 @@ if _is_master:
 # ---------------------------------------------------------------------------
 # 4.  Model
 # ---------------------------------------------------------------------------
-from src.model import build_hooked_vit, set_attention_temperature  # noqa: E402
+from src.model import build_hooked_vit, set_attention_temperature  
 
 iter_num = 0
 best_val_loss = float("inf")
@@ -498,7 +485,7 @@ if cfg.wandb_log:
 #     fisher    — λ_max(F)               empirical Fisher
 #     kfac      — max λ_max(A)·λ_max(G)  K-FAC Kronecker proxy
 # ---------------------------------------------------------------------------
-from src.helpers import (  # noqa: E402
+from src.helpers import (  
     get_VV_subspace_mask,
     get_curvature_metrics,
     get_attention_entropy,
@@ -774,7 +761,7 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from plot_history import plot_history  # noqa: E402
+    from plot_history import plot_history  
 
     plot_history(
         pkl_path=history_path,

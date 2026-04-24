@@ -23,7 +23,6 @@ logs/
 *.png
 
 # SLURM
-.sh
 *.sbatch
 *.out
 *.err
