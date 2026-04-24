@@ -2,24 +2,22 @@
 plot_history.py — Re-run all post-training plots and analysis from a saved
 history.pkl file.
 
-This is useful for re-analysing previous runs with the new ``skip_intv``
-mode (which strips zero-placeholder intervals instead of carry-forwarding).
-
 Usage
 -----
-Basic (uses the directory containing the .pkl as output)::
+Basic (output goes next to the .pkl file)::
 
     python plot_history.py path/to/history.pkl
 
-Specify an output directory::
+Custom output directory::
 
-    python plot_history.py path/to/history.pkl -o reanalysis_output/
+    python plot_history.py path/to/history.pkl -o reanalysis/
 
-Override hessian/entropy frequencies (defaults: 500)::
+Override frequencies (default 500)::
 
-    python plot_history.py out/cifar100_vitb16/20260414-212042/history.pkl --hessian_freq 100 --entropy_freq 100
+    python plot_history.py out/cifar100_vitb16/.../history.pkl \\
+        --hessian_freq 100 --entropy_freq 100
 
-Use legacy carry-forward mode::
+Legacy carry-forward mode::
 
     python plot_history.py path/to/history.pkl --no-skip-intv
 """
@@ -37,7 +35,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
-# Path setup — same as base_train.py so ``src`` sub-package resolves.
+# Path setup — mirror base_train.py so ``src`` sub-package resolves.
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
@@ -52,7 +50,7 @@ from src.plotting import (  # noqa: E402
 
 
 class _Tee:
-    """Write to both a stream and a string buffer simultaneously."""
+    """Write to both stdout and an in-memory buffer simultaneously."""
 
     def __init__(self, stream):
         self._stream = stream
@@ -69,123 +67,244 @@ class _Tee:
         return self._buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Markdown helpers
+# ---------------------------------------------------------------------------
+
+def _md_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Render a simple Markdown table string."""
+    col_w = [max(len(h), max((len(str(r[i])) for r in rows), default=0))
+             for i, h in enumerate(headers)]
+    sep = "| " + " | ".join("-" * w for w in col_w) + " |"
+    header = "| " + " | ".join(h.ljust(col_w[i]) for i, h in enumerate(headers)) + " |"
+    lines = [header, sep]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row[i]).ljust(col_w[i]) for i in range(len(headers))) + " |")
+    return "\n".join(lines)
+
+
+def _corr_rows(corr_dict: dict) -> list[list[str]]:
+    rows = []
+    for label, vals in corr_dict.items():
+        sp = f"{vals['spearman']:.4f}" if isinstance(vals, dict) else "n/a"
+        pe = f"{vals['pearson']:.4f}"  if isinstance(vals, dict) else "n/a"
+        rows.append([label, sp, pe])
+    return rows
+
+
+def _write_analysis_md(
+    out_dir: str,
+    run_label: str,
+    pkl_path: str,
+    corr_results: dict,
+    spike_all: dict[float, dict],   # z → {proxy: result_dict}
+    lam: float,
+    hessian_freq: int,
+    entropy_freq: int,
+) -> None:
+    """Write a Markdown analysis report to analysis.md."""
+    lines = [
+        f"# Analysis: {run_label}",
+        "",
+        f"- **Source**: `{pkl_path}`",
+        f"- **Smoothing λ**: {lam}",
+        f"- **Hessian freq**: {hessian_freq}",
+        f"- **Entropy freq**: {entropy_freq}",
+        "",
+    ]
+
+    proxy_display = {
+        "H vs Prec_H":           "H vs Prec_H",
+        "H vs H_VV":             "H vs H_VV",
+        "H vs GN":               "H vs GN",
+        "H vs Diag_H":           "H vs Diag_H",
+        "H vs Fisher":           "H vs Fisher",
+        "H vs KFAC":             "H vs KFAC",
+        "H vs FD":               "H vs FD",
+        "H vs BFGS":             "H vs BFGS",
+        "Prec_H vs H_VV":        "Prec_H vs H_VV",
+        "Prec_H vs GN":          "Prec_H vs GN",
+        "Prec_H vs Diag_H":      "Prec_H vs Diag_H",
+        "Prec_H vs Fisher":      "Prec_H vs Fisher",
+        "Prec_H vs KFAC":        "Prec_H vs KFAC",
+        "H vs Entropy(L0)":      "H vs Entropy(L0)",
+        "H vs Entropy(avg)":     "H vs Entropy(avg)",
+        "Prec_H vs Entropy(L0)": "Prec_H vs Entropy(L0)",
+        "Prec_H vs Entropy(avg)":"Prec_H vs Entropy(avg)",
+        "H_VV vs Entropy(L0)":   "H_VV vs Entropy(L0)",
+        "GN vs Entropy(L0)":     "GN vs Entropy(L0)",
+    }
+
+    if corr_results.get("raw"):
+        lines += ["## Raw Correlations", ""]
+        rows = _corr_rows(corr_results["raw"])
+        if rows:
+            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
+        lines.append("")
+
+    if corr_results.get("smoothed"):
+        lines += [f"## Smoothed Correlations (λ={lam})", ""]
+        rows = _corr_rows(corr_results["smoothed"])
+        if rows:
+            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
+        lines.append("")
+
+    if corr_results.get("entropy"):
+        lines += [f"## Proxy vs Entropy (smoothed, λ={lam})", ""]
+        rows = _corr_rows(corr_results["entropy"])
+        if rows:
+            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
+        lines.append("")
+
+    proxy_label_map = {
+        "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",
+        "diag_h": "Diag_H", "fisher": "Fisher", "bfgs": "BFGS",
+        "fd": "FD", "kfac": "KFAC",
+    }
+    for z, spike_results in sorted(spike_all.items()):
+        lines += [f"## Spike Co-occurrence (z={z})", ""]
+        rows = []
+        for key, res in spike_results.items():
+            label = proxy_label_map.get(key, key)
+            p = res["P(Y_spike | X_spike)"]
+            p_str = f"{p:.3f}" if not (p != p) else "nan"   # nan check
+            rows.append([f"H vs {label}", str(res["n_X_spikes"]),
+                         str(res["n_joint_spikes"]), p_str])
+        if rows:
+            lines.append(_md_table(["Pair", "n_H_spikes", "n_joint", "P(Y|X spike)"], rows))
+        lines.append("")
+
+    md_path = os.path.join(out_dir, "analysis.md")
+    with open(md_path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"[plot_history] analysis report → {md_path}")
+
+
+# ---------------------------------------------------------------------------
+
 def plot_history(
     pkl_path: str,
     out_dir: str | None = None,
     hessian_freq: int = 500,
     entropy_freq: int = 500,
     skip_intv: bool = True,
-    lam: float = 100.0,
+    lam: float = 10.0,
     compute_fd: bool = False,
 ) -> None:
     """
-    Load a ``history.pkl`` and reproduce every post-training plot and
-    analysis from ``base_train.py`` section 11.
+    Load a ``history.pkl`` and reproduce every post-training plot and analysis.
 
-    All printed analysis is also saved to ``analysis.txt`` inside the
-    output directory.
+    Outputs:
+        * ``training_dynamics.png``
+        * ``curvature_smoothed_comparison.png``
+        * Spike co-occurrence PNGs for z=1.5 and z=2.0
+        * ``analysis.txt`` — raw stdout capture
+        * ``analysis.md``  — structured Markdown report with tables
 
     Args:
         pkl_path:     Path to a ``history.pkl`` file.
-        out_dir:      Directory to write plots and analysis text.
-                      Defaults to the directory containing *pkl_path*.
-        hessian_freq: Hessian computation frequency used during training.
-        entropy_freq: Entropy computation frequency used during training.
-        skip_intv:    If True (default), use the new interval-skipping mode.
-                      If False, use legacy carry-forward step-function.
-        lam:          Smoothing strength for Whittaker–Henderson smoother.
-        compute_fd:   If True, include BFGS and FD metrics in plots and
-                      analysis.  Should match the value used during training.
+        out_dir:      Output directory; defaults to same dir as pkl_path.
+        hessian_freq: Hessian frequency used during training.
+        entropy_freq: Entropy frequency used during training.
+        skip_intv:    True (default) = interval-skipping; False = carry-forward.
+        lam:          Whittaker–Henderson smoothing strength.
+        compute_fd:   Include BFGS/FD metrics (must match training config).
     """
-    # --- Load history ---
     with open(pkl_path, "rb") as f:
         history = pickle.load(f)
-    print(f"[plot_history] loaded {pkl_path}  ({len(history.get('loss', []))} iterations)")
+    n_iters = len(history.get("loss", []))
+    print(f"[plot_history] loaded {pkl_path}  ({n_iters} iterations)")
 
     if out_dir is None:
         out_dir = os.path.dirname(os.path.abspath(pkl_path))
     os.makedirs(out_dir, exist_ok=True)
 
-    # --- Tee stdout so we capture all printed analysis ---
+    run_label = os.path.basename(os.path.dirname(os.path.abspath(pkl_path)))
+
     tee = _Tee(sys.stdout)
     old_stdout = sys.stdout
     sys.stdout = tee
 
+    corr_results: dict = {}
+    spike_all: dict[float, dict] = {}
+
     try:
         # --- Correlations ---
-        print_correlations(
-            history, "Run", lam=lam, include_smooth=True,
+        corr_results = print_correlations(
+            history, run_label, lam=lam, include_smooth=True,
             skip_intv=skip_intv, hessian_freq=hessian_freq,
             compute_fd=compute_fd,
         )
 
-        # --- Training dynamics (loss + entropy) ---
+        # --- Training dynamics ---
         lr_value = history.get("lr", [0.0])
         lr_peak = max(lr_value) if lr_value else 0.0
         fig = plot_training_dynamics(
-            histories={"Run": history},
-            lrs={"Run": lr_peak},
+            histories={run_label: history},
+            lrs={run_label: lr_peak},
             save_path=os.path.join(out_dir, "training_dynamics.png"),
             skip_intv=skip_intv,
             entropy_freq=entropy_freq,
         )
         plt.close(fig)
-        print(f"[plot] training dynamics → {os.path.join(out_dir, 'training_dynamics.png')}")
+        print(f"[plot] training_dynamics.png")
 
         # --- Smoothed curvature comparison ---
         fig_smooth = plot_curvature_smoothed_comparison(
-            history,
-            lam=lam,
+            history, lam=lam,
             save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
             skip_intv=skip_intv,
             hessian_freq=hessian_freq,
             compute_fd=compute_fd,
         )
         plt.close(fig_smooth)
-        print(f"[plot] smoothed curvature comparison → {os.path.join(out_dir, 'curvature_smoothed_comparison.png')}")
+        print(f"[plot] curvature_smoothed_comparison.png")
 
         # --- Spike co-occurrence ---
         proxy_label = {
-            "prec_h": "Prec_H",
-            "hessian_vv": "H_VV",
-            "gn": "GN",
-            "fd": "FD",
-            "diag_h": "Diag_H",
-            "fisher": "Fisher",
-            "bfgs": "BFGS",
-            "kfac": "KFAC",
+            "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",
+            "fd": "FD", "diag_h": "Diag_H", "fisher": "Fisher",
+            "bfgs": "BFGS", "kfac": "KFAC",
         }
-        for z in (1.5, 2):
+        for z in (1.5, 2.0):
             spike_figs, spike_results = plot_all_spike_cooccurrences(
-                history,
-                window=15,
-                z_score=z,
-                log_scale=True,
-                save_dir=out_dir,
-                skip_intv=skip_intv,
-                hessian_freq=hessian_freq,
-                compute_fd=compute_fd,
+                history, window=15, z_score=z, log_scale=True,
+                save_dir=out_dir, skip_intv=skip_intv,
+                hessian_freq=hessian_freq, compute_fd=compute_fd,
             )
             for fig_spike in spike_figs.values():
                 plt.close(fig_spike)
-
+            spike_all[z] = spike_results
             for key, res in spike_results.items():
                 label = proxy_label.get(key, key)
+                p = res["P(Y_spike | X_spike)"]
                 print(
-                    f"[plot] z={z} spike co-occurrence: "
-                    f"P({label} spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}"
+                    f"[spike z={z}] P({label} spike | H spike) = "
+                    f"{'nan' if p != p else f'{p:.3f}'}"
                 )
 
-        print(f"\n[plot_history] all outputs saved to {out_dir}")
+        print(f"\n[plot_history] outputs saved to {out_dir}")
 
     finally:
         sys.stdout = old_stdout
 
-    # --- Write analysis text ---
+    # --- Write plain-text log ---
     txt_path = os.path.join(out_dir, "analysis.txt")
     with open(txt_path, "w") as f:
         f.write(tee.getvalue())
-    print(f"[plot_history] analysis log → {txt_path}")
+    print(f"[plot_history] analysis.txt  → {txt_path}")
+
+    # --- Write Markdown report ---
+    _write_analysis_md(
+        out_dir=out_dir,
+        run_label=run_label,
+        pkl_path=pkl_path,
+        corr_results=corr_results,
+        spike_all=spike_all,
+        lam=lam,
+        hessian_freq=hessian_freq,
+        entropy_freq=entropy_freq,
+    )
 
 
 def main():
@@ -195,7 +314,7 @@ def main():
     parser.add_argument("pkl_path", type=str, help="Path to history.pkl")
     parser.add_argument(
         "-o", "--out-dir", type=str, default=None,
-        help="Output directory (default: same directory as pkl_path)",
+        help="Output directory (default: same dir as pkl_path)",
     )
     parser.add_argument(
         "--hessian_freq", type=int, default=500,
@@ -210,12 +329,12 @@ def main():
         help="Use legacy carry-forward mode instead of interval-skipping",
     )
     parser.add_argument(
-        "--lam", type=float, default=100.0,
-        help="Smoothing strength for Whittaker–Henderson smoother (default: 100)",
+        "--lam", type=float, default=10.0,
+        help="Smoothing strength for Whittaker–Henderson smoother (default: 10)",
     )
     parser.add_argument(
         "--compute-fd", action="store_true",
-        help="Include BFGS and FD metrics (only if they were computed during training)",
+        help="Include BFGS and FD metrics (only if computed during training)",
     )
     args = parser.parse_args()
 

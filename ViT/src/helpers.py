@@ -46,31 +46,25 @@ def _second_difference_matrix(n: int) -> np.ndarray:
 
 def smooth_log_trend(
     y: np.ndarray | list,
-    lam: float = 100.0,
+    lam: float = 10.0,
     eps: float = 1e-12,
     use_abs: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Extract a smooth trend from a positive time-series by solving a
-    regularised least-squares problem in log-space:
+    Extract a smooth trend from a positive time-series via regularised
+    least-squares in log-space:
 
         min_m  ‖log(y) − m‖²  +  λ ‖D m‖²
 
-    where D is the second-difference operator (discrete second derivative).
-    The regularisation parameter *lam* controls the smoothness of the trend
-    (higher → smoother).
-
-    This is the same technique used in the LLM notebook
-    (``NanoGPT_shakespear.ipynb``) to compare curvature-proxy dynamics
-    without relying solely on spike-detection.
+    D is the second-difference operator; lam controls smoothness (higher → smoother).
+    lam=10 works well for typical curvature traces.
 
     Args:
         y:       1-D array of (ideally positive) measurements.
-        lam:     Smoothing strength (λ).  100 is a good default.
-        eps:     Floor value to avoid log(0).
-        use_abs: If True, take |y| before logging (useful when the
-                 estimator is conceptually non-negative but may produce
-                 small negative values due to numerical noise).
+        lam:     Smoothing strength (λ).  10 is a good default.
+        eps:     Floor added before logging to avoid log(0).
+        use_abs: If True, take |y| before logging (for estimators that
+                 may produce small negative values due to numerical noise).
 
     Returns:
         trend_raw:  exp(m) — smooth trend on the original scale.

@@ -542,7 +542,7 @@ def plot_all_spike_cooccurrences(
 
 
 # ======================================================================
-# Correlation analysis (matches notebook.ipynb Cell 3)
+# Correlation analysis
 # ======================================================================
 
 
@@ -550,28 +550,34 @@ def print_correlations(
     history: dict,
     name: str,
     sample_every: int = 1,
-    lam: float = 100.0,
+    lam: float = 10.0,
     include_smooth: bool = True,
     skip_intv: bool = True,
     hessian_freq: int = 1,
     compute_fd: bool = False,
-) -> None:
+) -> dict:
     """
-    Print raw and (optionally) smoothed correlations for curvature metrics.
+    Print raw and smoothed correlations for curvature metrics and return
+    a structured results dict for downstream reporting.
+
+    Compares both H (λ_max of full Hessian) and Prec_H (Adam-preconditioned
+    Hessian) as reference signals against all other proxies, and also
+    reports proxy-vs-entropy correlations.
 
     Args:
-        history:      History dict from the training loop.  Expected keys:
-                      ``hessian``, ``prec_h``, ``gn``, ``hessian_vv``
-                      (or ``vv``).
+        history:      Training history dict.  Keys: ``hessian``, ``prec_h``,
+                      ``gn``, ``hessian_vv`` / ``vv``, etc.
         name:         Experiment name (printed as a header).
-        sample_every: Subsample stride (e.g. 3 if metrics were recorded
-                      every 3rd iteration, matching the notebook's
-                      ``[::3]`` slicing).
-        skip_intv:    If True (default), extract only positive finite values
-                      before computing correlations.  If False, use the full
-                      arrays (legacy behavior with zeros between measurements).
+        sample_every: Subsample stride applied after extraction.
+        lam:          Whittaker–Henderson smoothing strength.
+        include_smooth: If False, skip the smoothed-correlation block.
+        skip_intv:    If True (default), use only positive finite values.
         hessian_freq: Hessian computation frequency (informational).
-        compute_fd:   If False (default), skip BFGS and FD correlations.
+        compute_fd:   If True, include BFGS and FD metrics.
+
+    Returns:
+        dict with keys ``raw``, ``smoothed``, ``entropy`` — each mapping
+        a pair label to ``{"spearman": float, "pearson": float}``.
     """
     def _gk(d, *keys):
         for k in keys:
@@ -583,46 +589,68 @@ def print_correlations(
                 return raw[::sample_every]
         return np.asarray([])
 
-    h = _gk(history, "hessian")
+    h      = _gk(history, "hessian")
     prec_h = _gk(history, "prec_h")
-    vv = _gk(history, "hessian_vv", "vv")
-    gn = _gk(history, "gn")
+    vv     = _gk(history, "hessian_vv", "vv")
+    gn     = _gk(history, "gn")
     diag_h = _gk(history, "diag_h")
     fisher = _gk(history, "fisher")
-    kfac = _gk(history, "kfac")
+    kfac   = _gk(history, "kfac")
     if compute_fd:
-        fd = _gk(history, "fd")
+        fd   = _gk(history, "fd")
         bfgs = _gk(history, "bfgs")
         if not _has_positive_finite(fd) and not _has_positive_finite(bfgs):
-            print("[warn] compute_fd=True but FD/BFGS data has no positive values — was compute_fd enabled during training?")
+            print("[warn] compute_fd=True but FD/BFGS data has no positive values")
 
-    def _corr(a, b, label):
-        mask = np.isfinite(a) & np.isfinite(b)
+    results: dict = {"raw": {}, "smoothed": {}, "entropy": {}}
+
+    def _corr(a, b, label, store: dict | None = None):
+        """Compute and print Spearman + Pearson; optionally store in *store*."""
+        n = min(len(a), len(b))
+        if n == 0:
+            print(f"  {label}: no data")
+            return
+        a_, b_ = a[:n], b[:n]
+        mask = np.isfinite(a_) & np.isfinite(b_)
         if mask.sum() < 3:
             print(f"  {label}: insufficient data")
             return
-        a_m = a[mask]
-        b_m = b[mask]
+        a_m, b_m = a_[mask], b_[mask]
         if np.std(a_m) < 1e-12 or np.std(b_m) < 1e-12:
             print(f"  {label}: constant/near-constant series")
             return
         sp, _ = sp_stats.spearmanr(a_m, b_m)
         pe, _ = sp_stats.pearsonr(a_m, b_m)
         print(f"  {label}: Spearman {sp:.4f} | Pearson {pe:.4f}")
+        if store is not None:
+            store[label.strip()] = {"spearman": float(sp), "pearson": float(pe)}
 
-    print(f"\n--- {name} Correlation Results ---")
-    _corr(h, prec_h,  "H vs Prec_H ")
-    _corr(h, vv,      "H vs H_VV   ")
-    _corr(h, gn,      "H vs GN     ")
-    _corr(h, diag_h,  "H vs Diag_H ")
-    _corr(h, fisher,  "H vs Fisher ")
-    _corr(h, kfac,    "H vs KFAC   ")
+    # --- Raw correlations: H as reference ---
+    print(f"\n--- {name} Raw Correlations (H as reference) ---")
+    _corr(h, prec_h, "H vs Prec_H  ", results["raw"])
+    _corr(h, vv,     "H vs H_VV    ", results["raw"])
+    _corr(h, gn,     "H vs GN      ", results["raw"])
+    _corr(h, diag_h, "H vs Diag_H  ", results["raw"])
+    _corr(h, fisher, "H vs Fisher  ", results["raw"])
+    _corr(h, kfac,   "H vs KFAC    ", results["raw"])
     if compute_fd:
-        _corr(h, fd,      "H vs FD     ")
-        _corr(h, bfgs,    "H vs BFGS   ")
+        _corr(h, fd,   "H vs FD      ", results["raw"])
+        _corr(h, bfgs, "H vs BFGS    ", results["raw"])
+
+    # --- Raw correlations: Prec_H as reference ---
+    if _has_positive_finite(prec_h):
+        print(f"\n--- {name} Raw Correlations (Prec_H as reference) ---")
+        _corr(prec_h, vv,     "Prec_H vs H_VV   ", results["raw"])
+        _corr(prec_h, gn,     "Prec_H vs GN     ", results["raw"])
+        _corr(prec_h, diag_h, "Prec_H vs Diag_H ", results["raw"])
+        _corr(prec_h, fisher, "Prec_H vs Fisher ", results["raw"])
+        _corr(prec_h, kfac,   "Prec_H vs KFAC   ", results["raw"])
+        if compute_fd:
+            _corr(prec_h, fd,   "Prec_H vs FD     ", results["raw"])
+            _corr(prec_h, bfgs, "Prec_H vs BFGS   ", results["raw"])
 
     if not include_smooth:
-        return
+        return results
 
     def _smooth(arr):
         if arr.size < 3:
@@ -630,55 +658,73 @@ def print_correlations(
         trend, _, _ = smooth_log_trend(arr, lam=lam, use_abs=True)
         return trend
 
-    h_s = _smooth(h)
+    h_s      = _smooth(h)
     prec_h_s = _smooth(prec_h)
-    vv_s = _smooth(vv)
-    gn_s = _smooth(gn)
+    vv_s     = _smooth(vv)
+    gn_s     = _smooth(gn)
     diag_h_s = _smooth(diag_h)
     fisher_s = _smooth(fisher)
-    kfac_s = _smooth(kfac)
+    kfac_s   = _smooth(kfac)
 
-    print(f"\n--- {name} Smoothed Correlation Results (λ={lam}) ---")
-    _corr(h_s, prec_h_s, "H vs Prec_H ")
-    _corr(h_s, vv_s,     "H vs H_VV   ")
-    _corr(h_s, gn_s,     "H vs GN     ")
-    _corr(h_s, diag_h_s, "H vs Diag_H ")
-    _corr(h_s, fisher_s, "H vs Fisher ")
-    _corr(h_s, kfac_s,   "H vs KFAC   ")
+    # --- Smoothed: H as reference ---
+    print(f"\n--- {name} Smoothed Correlations, H reference (λ={lam}) ---")
+    _corr(h_s, prec_h_s, "H vs Prec_H  ", results["smoothed"])
+    _corr(h_s, vv_s,     "H vs H_VV    ", results["smoothed"])
+    _corr(h_s, gn_s,     "H vs GN      ", results["smoothed"])
+    _corr(h_s, diag_h_s, "H vs Diag_H  ", results["smoothed"])
+    _corr(h_s, fisher_s, "H vs Fisher  ", results["smoothed"])
+    _corr(h_s, kfac_s,   "H vs KFAC    ", results["smoothed"])
     if compute_fd:
-        fd_s = _smooth(fd)
+        fd_s   = _smooth(fd)
         bfgs_s = _smooth(bfgs)
-        _corr(h_s, fd_s,     "H vs FD     ")
-        _corr(h_s, bfgs_s,   "H vs BFGS   ")
+        _corr(h_s, fd_s,   "H vs FD      ", results["smoothed"])
+        _corr(h_s, bfgs_s, "H vs BFGS    ", results["smoothed"])
 
-    # raw_ent = history.get("entropy", [])
-    # if raw_ent and len(raw_ent) > 0:
-    #     ent_arr = np.array(raw_ent[::sample_every])
-    #     if ent_arr.ndim == 2 and ent_arr.shape[1] > 0:
-    #         ent_first = ent_arr[:, 0]
-    #         ent_avg = ent_arr.mean(axis=1)
-    #     else:
-    #         ent_first = ent_avg = np.asarray([])
-    # else:
-    #     ent_first = ent_avg = np.asarray([])
+    # --- Smoothed: Prec_H as reference ---
+    if _has_positive_finite(prec_h_s):
+        print(f"\n--- {name} Smoothed Correlations, Prec_H reference (λ={lam}) ---")
+        _corr(prec_h_s, vv_s,     "Prec_H vs H_VV   ", results["smoothed"])
+        _corr(prec_h_s, gn_s,     "Prec_H vs GN     ", results["smoothed"])
+        _corr(prec_h_s, diag_h_s, "Prec_H vs Diag_H ", results["smoothed"])
+        _corr(prec_h_s, fisher_s, "Prec_H vs Fisher ", results["smoothed"])
+        _corr(prec_h_s, kfac_s,   "Prec_H vs KFAC   ", results["smoothed"])
+        if compute_fd:
+            _corr(prec_h_s, fd_s,   "Prec_H vs FD     ", results["smoothed"])
+            _corr(prec_h_s, bfgs_s, "Prec_H vs BFGS   ", results["smoothed"])
 
-    # if ent_first.size >= 3 and h_s.size >= 3:
-    #     n = min(len(h_s), len(ent_first))
-    #     print(f"\n--- {name} Smoothed Proxy vs Entropy (λ={lam}) ---")
-    #     _corr(h_s[:n],      ent_first[:n], "H vs Entropy(L0) ")
-    #     _corr(h_s[:n],      ent_avg[:n],   "H vs Entropy(avg)")
-    #     _corr(vv_s[:n],     ent_first[:n], "H_VV vs Entropy  ")
-    #     _corr(prec_h_s[:n], ent_first[:n], "Prec_H vs Entropy")
+    # --- Proxy vs entropy ---
+    raw_ent = history.get("entropy", [])
+    if raw_ent and len(raw_ent) > 0:
+        ent_arr = np.array(raw_ent[::sample_every])
+        if ent_arr.ndim == 2 and ent_arr.shape[1] > 0:
+            ent_first = ent_arr[:, 0]
+            ent_avg   = ent_arr.mean(axis=1)
+        else:
+            ent_first = ent_avg = np.asarray([])
+    else:
+        ent_first = ent_avg = np.asarray([])
+
+    if ent_first.size >= 3 and h_s.size >= 3:
+        n = min(len(h_s), len(ent_first))
+        print(f"\n--- {name} Smoothed Proxy vs Entropy (λ={lam}) ---")
+        _corr(h_s[:n],      ent_first[:n], "H vs Entropy(L0)      ", results["entropy"])
+        _corr(h_s[:n],      ent_avg[:n],   "H vs Entropy(avg)     ", results["entropy"])
+        _corr(prec_h_s[:n], ent_first[:n], "Prec_H vs Entropy(L0) ", results["entropy"])
+        _corr(prec_h_s[:n], ent_avg[:n],   "Prec_H vs Entropy(avg)", results["entropy"])
+        _corr(vv_s[:n],     ent_first[:n], "H_VV vs Entropy(L0)   ", results["entropy"])
+        _corr(gn_s[:n],     ent_first[:n], "GN vs Entropy(L0)     ", results["entropy"])
+
+    return results
 
 
 def print_smooth_correlations(
     history: dict,
     name: str,
-    lam: float = 100.0,
+    lam: float = 10.0,
     sample_every: int = 1,
-) -> None:
-    """Backward-compatible wrapper for legacy call sites."""
-    print_correlations(
+) -> dict:
+    """Backward-compatible wrapper — delegates to print_correlations."""
+    return print_correlations(
         history,
         name,
         sample_every=sample_every,

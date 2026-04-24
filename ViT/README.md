@@ -1,13 +1,128 @@
 # ViT — Entropy Collapse Experiments
 
-This folder contains entropy-collapse experiments for Vision Transformers (ViT)
-and is designed to reproduce and extend the results from
-[apple/ml-sigma-reparam](https://github.com/apple/ml-sigma-reparam).
-
+Entropy-collapse analysis for Vision Transformers (ViT), extending
+[apple/ml-sigma-reparam](https://github.com/apple/ml-sigma-reparam) with
+nine curvature proxies and per-layer attention-entropy tracking.
 
 ---
 
-## Result
+## Quick Setup
+
+### 1. Install dependencies
+
+```bash
+# venv
+python3.10 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r ViT/requirements.txt
+```
+
+```bash
+# Conda
+conda create -n entropy-vit python=3.10 -y && conda activate entropy-vit
+pip install -r ViT/requirements.txt
+```
+
+### 2. Train (default: ViT-B/16 on CIFAR-100)
+
+```bash
+python ViT/base_train.py
+```
+
+CIFAR-100 is downloaded automatically on first run.
+
+---
+
+## Config Presets
+
+Select a preset with `config=<name>` on the command line.
+Each preset is a `@dataclass` defined in `configs/train_config.py`.
+
+| Preset | Model | Dataset | Batch | LR | Max Iters |
+|---|---|---|---|---|---|
+| `default` / `cifar100_base` | ViT-B/16 (86 M) | CIFAR-100 | 128 | 1e-3 | 50 000 |
+| `imagenet1k_base` | ViT-B/16 (86 M) | ImageNet-1k | 256 | 1e-3 | 50 000 |
+| `cifar100_large` | ViT-L/16 (307 M) | CIFAR-100 | 64 | 5e-4 | 50 000 |
+| `imagenet1k_large` | ViT-L/16 (307 M) | ImageNet-1k | 128 | 5e-4 | 50 000 |
+| `cifar100_huge` | ViT-H/14 (632 M) | CIFAR-100 | 32 | 3e-4 | 50 000 |
+| `imagenet1k_huge` | ViT-H/14 (632 M) | ImageNet-1k | 64 | 3e-4 | 50 000 |
+
+```bash
+python ViT/base_train.py config=imagenet1k_base
+bash  ViT/train.sh        config=cifar100_large   # multi-GPU via torchrun
+```
+
+---
+
+## Advanced Experiments
+
+### Override individual flags
+
+Any `TrainConfig` field can be overridden on the command line after the preset:
+
+```bash
+python ViT/base_train.py config=imagenet1k_base \
+    learning_rate=5e-4 \
+    max_iters=100000 \
+    warmup_iters=10000 \
+    hessian_freq=10 \
+    entropy_freq=5 \
+    wandb_log=true \
+    wandb_run_name=vit-b16-imagenet-run
+```
+
+### Multi-GPU training
+
+`train.sh` wraps `torchrun`. Set `GPUS` to select devices:
+
+```bash
+GPUS=0,1,2,3 bash ViT/train.sh config=cifar100_large
+```
+
+### ImageNet-1k via Hugging Face
+
+When `data_dir` does not contain `train/` and `val/` sub-directories the
+dataset is downloaded from Hugging Face automatically.
+
+```bash
+# Accept the licence at https://huggingface.co/datasets/imagenet-1k first.
+export HF_TOKEN=hf_...
+python ViT/base_train.py config=imagenet1k_base data_dir=ViT/data/imagenet1k
+```
+
+Subsequent runs reuse the local cache.
+
+### Local ImageNet in ImageFolder layout
+
+```bash
+python ViT/base_train.py config=imagenet1k_base data_dir=/path/to/imagenet
+```
+
+---
+
+## Post-Training Analysis
+
+`plot_history.py` replays a saved `history.pkl` and writes all figures plus
+a structured analysis report.
+
+```bash
+python ViT/plot_history.py outputs/cifar100_base/history.pkl
+```
+
+Outputs written next to the pickle:
+
+| File | Contents |
+|---|---|
+| `*_curvature_smoothed_comparison.png` | Smoothed proxy traces (λ = 10) |
+| `*_training_dynamics.png` | Loss, accuracy, LR schedule |
+| `analysis.txt` | Full correlation report (plain text) |
+| `analysis.md` | Markdown tables: raw/smoothed correlations, spike co-occurrence |
+
+Override the smoothing strength: `python ViT/plot_history.py history.pkl --lam 20`
+
+---
+
+## Results
 
 ### imagenet1k (with temperature shift at 15k-th epoch)
 
@@ -22,7 +137,7 @@ and is designed to reproduce and extend the results from
 | H vs Fisher | 0.6614   | 0.5349   |
 | H vs KFAC   | 0.5420   | −0.0394  |
 
-#### Smoothed Correlations (λ = 100.0)
+#### Smoothed Correlations (λ = 100)
 
 | Pair        | Spearman | Pearson  |
 |-------------|----------|----------|
@@ -46,7 +161,7 @@ and is designed to reproduce and extend the results from
 
 ![Curvature metrics](figure/imagenet1k_curvature_smoothed_comparison.png)
 
-![training dynamics](figure/imagenet1k_training_dynamics.png)
+![Training dynamics](figure/imagenet1k_training_dynamics.png)
 
 ### cifar100
 
@@ -61,7 +176,7 @@ and is designed to reproduce and extend the results from
 | H vs Fisher | 0.2038   | 0.1238  |
 | H vs KFAC   | 0.2296   | 0.3463  |
 
-#### Smoothed Correlations (λ = 100.0)
+#### Smoothed Correlations (λ = 100)
 
 | Pair        | Spearman | Pearson  |
 |-------------|----------|----------|
@@ -83,120 +198,9 @@ and is designed to reproduce and extend the results from
 | H vs Fisher | 0.250   | 0.222   |
 | H vs KFAC   | 0.089   | 0.083   |
 
-
 ![Curvature metrics](figure/cifar100_curvature_smoothed_comparison.png)
 
-![training dynamics](figure/cifar100_training_dynamics.png)
-
-
----
-
-## Environment Setup
-
-### Option A — venv
-
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip setuptools wheel
-pip install -r ViT/requirements.txt
-```
-
-### Option B — Conda
-
-```bash
-conda create -n entropy-vit python=3.10 -y
-conda activate entropy-vit
-pip install --upgrade pip setuptools wheel
-pip install -r ViT/requirements.txt
-```
-
----
-
-## Quick Start
-
-### Train with default config (CIFAR-10)
-
-```bash
-python ViT/base_train.py
-```
-
-### Train on CIFAR-100
-
-
-```bash
-python ViT/base_train.py \
-    config=cifar100_small \
-    dataset=cifar100 \
-    data_dir=ViT/data/ \
-    num_classes=100 \
-    --optim adamw \
-    --lr 1e-3 \
-    --max_it 1000
-```
-
-### Train on ImageNet-1k
-
-
-#### Option A — Local ImageFolder data
-
-If you already have ImageNet-1k on disk in `ImageFolder` layout
-(`train/` and `val/` sub-directories), point `data_dir` at it:
-
-```bash
-python ViT/base_train.py \
-    config=imagenet1k_base \
-    data_dir=/path/to/imagenet
-```
-
-#### Option B — Automatic Hugging Face download
-
-
-
-When `data_dir` does **not** contain `train/` and `val/` folders, the
-dataset is automatically downloaded from Hugging Face and cached locally.
-
-In which case you need to:
-
-1. Accept the licence at <https://huggingface.co/datasets/imagenet-1k>
-2. Create a [Hugging Face access token](https://huggingface.co/settings/tokens)
-3. Export it before running:
-
-```bash
-export HF_TOKEN=hf_...
-```
-
-Subsequent runs reuse the cache — no re-download needed:
-
-```bash
-python ViT/base_train.py \
-    config=imagenet1k_base \
-    data_dir=ViT/data/imagenet1k
-```
-
-### Override core flags
-
-```bash
-python ViT/base_train.py \
-    --optim adamw \
-    --lr 1e-3 \
-    --max_it 5000 \
-    hessian_freq=5 \
-    entropy_freq=10 \
-    --wandb true \
-    wandb_run_name=vit-cifar10-run
-```
-
----
-
-## Common CLI Flags
-
-| Short flag | Full name | Default |
-|---|---|---|
-| `--lr` | `learning_rate` | `1e-3` |
-| `--optim` | `optimizer` | `adamw` |
-| `--max_it` | `max_iters` | `5000` |
-| `--wandb` | `wandb_log` | `false` |
+![Training dynamics](figure/cifar100_training_dynamics.png)
 
 ---
 
@@ -204,9 +208,10 @@ python ViT/base_train.py \
 
 | File | Description |
 |---|---|
-| `base_train.py` | Training entry-point |
-| `configs/train_config.py` | All configurable flags |
-| `src/model.py`  — timm ViT with attention caching |
-| `src/helpers.py` | Curvature metric helpers |
-| `src/data_utils.py` | CIFAR-10/100 / ImageNet data loaders |
-| `src/plotting.py` | Training-dynamics plots, spike detection, correlations |
+| `base_train.py` | Training entry-point; accepts `config=<preset> key=value …` |
+| `configs/train_config.py` | All hyperparameter presets and field definitions |
+| `src/model.py` | timm ViT with hooked attention for entropy logging |
+| `src/helpers.py` | Nine curvature proxies (H, Prec_H, H_VV, GN, Fisher, K-FAC, …) |
+| `src/data_utils.py` | CIFAR-100 / ImageNet-1k data loaders with auto-download |
+| `src/plotting.py` | Dynamics plots, spike detection, proxy correlation analysis |
+| `plot_history.py` | Post-training CLI: `history.pkl → figures + analysis.{txt,md}` |

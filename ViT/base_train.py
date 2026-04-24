@@ -1,44 +1,46 @@
 """
 base_train.py — ViT entropy-collapse training script.
 
-This script trains a HookedViT model (timm ViT-Small by default) while
-logging:
-  * Train loss / accuracy — every iteration
-  * Val loss / accuracy   — every ``eval_interval`` iterations
-  * Curvature metrics — spectral-norm (λ_max) estimates for all nine proxies:
-                         H (exact), H_tilde (Adam-preconditioned), H_VV (value
-                         subspace), H_GN (Gauss-Newton), H_BFGS (central-diff
-                         FD), H_FD (forward-diff FD), Diag_H (max diagonal),
-                         Fisher (empirical), KFAC
-                         — every ``hessian_freq`` iterations
-  * Per-layer attention entropy
-                         — every ``entropy_freq`` iterations
+Default config: ViT-B/16 on CIFAR-100 with a DeiT recipe (see TrainConfig).
+Select a different preset via ``config=<name>``; available presets:
+  cifar100_base | imagenet1k_base | cifar100_large | imagenet1k_large |
+  cifar100_huge | imagenet1k_huge
 
-All metrics are emitted to stdout and (optionally) to Weights & Biases.
-Checkpoints are saved to ``out_dir`` at regular intervals and whenever
-the validation loss improves.
+Logged every iteration:
+  * Train loss / accuracy
+  * Learning rate
+
+Logged every ``eval_interval``:
+  * Val loss / accuracy
+
+Logged every ``hessian_freq``:
+  * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher, KFAC
+    (+ BFGS / FD when compute_fd=True)
+
+Logged every ``entropy_freq``:
+  * Per-layer attention entropy
 
 Usage
 -----
-Default config (CIFAR-10, ViT-Small/16, AdamW)::
+Default (ViT-B/16, CIFAR-100)::
 
     python base_train.py
 
-Override individual flags::
+Named preset::
 
-    python base_train.py --lr 5e-4 --optim sgd --max_it 2000
-    
-or with torchrun::
+    python base_train.py config=imagenet1k_base data_dir=/data/imagenet
 
-    torchrun --nproc_per_node=4 base_train.py \\
-        dataset=imagenet data_dir=/data/imagenet num_classes=1000 \\
-        --wandb true --lr 1e-3 --max_it 5000
+Override individual fields::
 
-The override syntax is identical to NanoGPT's ``configurator.py`` convention:
-any ``key=value`` argument is ``ast.literal_eval``'d and injected into the
-config dataclass.  For argparse-style flags, use short names such as
-``--cp``, ``--optim``, ``--lr``, ``--max_it``, ``--wandb``, and ``--z``.
+    python base_train.py --lr 5e-4 --max_it 10000 hessian_freq=100
 
+Multi-GPU via torchrun::
+
+    torchrun --nproc_per_node=4 base_train.py config=imagenet1k_base \\
+        data_dir=/data/imagenet --wandb true
+
+Key=value arguments are ast.literal_eval'd (NanoGPT-style).
+Argparse shortcuts: --lr, --optim, --max_it, --wandb, --cp, --temp_shift.
 """
 
 from __future__ import annotations
