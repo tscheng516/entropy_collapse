@@ -746,24 +746,26 @@ def plot_training_dynamics(
     entropy_freq: int = 1,
 ) -> plt.Figure:
     """
-        Plot compact training dynamics for one or two runs.
+    Plot compact training dynamics for one or two runs.
 
-        Panels per run:
-            * train/eval loss
-            * per-layer attention entropy
+    Panels per run (3 columns):
+        * Col 0 — train / eval loss
+        * Col 1 — train / eval accuracy
+        * Col 2 — per-layer attention entropy
 
     Args:
         histories:    Dict mapping optimizer name (e.g. ``"AdamW"``) to a
                       history dict with keys: ``loss``, ``val_loss``,
-                      and ``entropy``.
+                      ``acc`` / ``train_acc``, ``val_acc``, and ``entropy``.
                       ``entropy`` values are lists of per-layer floats.
+                      Accuracy series may be dense (one value per iter) or
+                      sparse (list of ``(iter, value)`` tuples).
         lrs:          Dict mapping optimizer name to the peak LR used
                       (kept for API compatibility).
         save_path:    If provided, save the figure to this path.
         skip_intv:    If True (default), skip zero-placeholder rows in the
                       entropy matrix and plot only actually-measured values
-                      against their true iteration indices.  If False, use
-                      the legacy ``_carry_forward_positive_2d`` fill.
+                      against their true iteration indices.
         entropy_freq: Entropy computation frequency (used for x-axis label).
 
     Returns:
@@ -771,7 +773,7 @@ def plot_training_dynamics(
     """
     opt_names = list(histories.keys())
     n_rows = len(opt_names)
-    fig, axs = plt.subplots(n_rows, 2, figsize=(14, 4.8 * n_rows))
+    fig, axs = plt.subplots(n_rows, 3, figsize=(21, 4.8 * n_rows))
     if n_rows == 1:
         axs = axs[np.newaxis, :]  # ensure 2-D indexing works
 
@@ -788,29 +790,69 @@ def plot_training_dynamics(
                 return arr.reshape(-1)
             return arr.ravel()
 
+        def _sparse_or_dense(series, dense_color, dense_label, ax,
+                             sparse_color=None, sparse_label=None,
+                             linestyle="--"):
+            """Plot a series that is either dense (1-D array) or sparse
+            (list of (iter, value) tuples).  Returns True if anything was
+            plotted."""
+            if not isinstance(series, list) or len(series) == 0:
+                return False
+            first = series[0]
+            if isinstance(first, (tuple, list)) and len(first) == 2:
+                xs = [int(t[0]) for t in series]
+                ys = [float(t[1]) for t in series]
+                lbl = sparse_label or dense_label
+                clr = sparse_color or dense_color
+                ax.plot(xs, ys, color=clr, linestyle=linestyle,
+                        linewidth=2, label=lbl)
+            else:
+                arr = np.asarray(series, dtype=float).ravel()
+                if arr.size == 0:
+                    return False
+                ax.plot(arr, color=dense_color, linestyle=linestyle,
+                        linewidth=2, label=dense_label)
+            return True
+
         # --- Col 0: train/eval loss ---
         ax_loss = axs[row, 0]
         loss_arr = _as1d("loss")
         ax_loss.plot(loss_arr, color=color, linewidth=2, label=f"{name} train loss")
-        val_series = h.get("val_loss", [])
-        if isinstance(val_series, list) and len(val_series) > 0:
-            first = val_series[0]
-            if isinstance(first, tuple) and len(first) == 2:
-                xs = [int(t[0]) for t in val_series]
-                ys = [float(t[1]) for t in val_series]
-                ax_loss.plot(xs, ys, color="crimson", linestyle="--", linewidth=2, label=f"{name} val loss")
-            else:
-                arr = np.asarray(val_series, dtype=float).ravel()
-                if arr.size:
-                    ax_loss.plot(arr, color="crimson", linestyle="--", linewidth=2, label=f"{name} val loss")
+        _sparse_or_dense(
+            h.get("val_loss", []),
+            dense_color="crimson", dense_label=f"{name} val loss",
+            ax=ax_loss,
+        )
         ax_loss.set_title(f"{name} Loss")
         ax_loss.set_xlabel("Iteration")
         ax_loss.set_ylabel("Cross-entropy loss")
-        ax_loss.legend(loc="upper left")
+        ax_loss.legend(loc="upper right")
         ax_loss.grid(True, alpha=0.25, linestyle="--")
 
-        # --- Col 1: per-layer attention entropy ---
-        ax_ent = axs[row, 1]
+        # --- Col 1: train/eval accuracy ---
+        ax_acc = axs[row, 1]
+        train_acc = _as1d("acc", "train_acc")
+        if train_acc.size:
+            ax_acc.plot(train_acc, color=color, linewidth=2,
+                        label=f"{name} train acc")
+        _sparse_or_dense(
+            h.get("val_acc", h.get("test_acc", [])),
+            dense_color="crimson", dense_label=f"{name} val acc",
+            ax=ax_acc,
+        )
+        ax_acc.set_title(f"{name} Accuracy")
+        ax_acc.set_xlabel("Iteration")
+        ax_acc.set_ylabel("Accuracy")
+        ax_acc.yaxis.set_major_formatter(
+            plt.matplotlib.ticker.PercentFormatter(xmax=1.0)
+            if (train_acc.size and train_acc.max() <= 1.0) else
+            plt.matplotlib.ticker.ScalarFormatter()
+        )
+        ax_acc.legend(loc="lower right")
+        ax_acc.grid(True, alpha=0.25, linestyle="--")
+
+        # --- Col 2: per-layer attention entropy ---
+        ax_ent = axs[row, 2]
         raw_entropy = np.array(h.get("entropy", []))
         if skip_intv:
             entropies, ent_idx = _extract_positive_2d(raw_entropy)
@@ -828,7 +870,8 @@ def plot_training_dynamics(
                     label=f"Layer {layer_idx + 1}",
                 )
         ax_ent.set_title(f"{name} Attention Entropy (Per Layer)")
-        _ent_xlabel = f"Iteration (every {entropy_freq})" if skip_intv and entropy_freq > 1 else "Iteration"
+        _ent_xlabel = (f"Iteration (every {entropy_freq})"
+                       if skip_intv and entropy_freq > 1 else "Iteration")
         ax_ent.set_xlabel(_ent_xlabel)
         ax_ent.set_ylabel("Entropy (nats)")
         ax_ent.legend(fontsize="small", ncol=2)
