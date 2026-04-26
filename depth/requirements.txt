@@ -1,0 +1,30 @@
+# depth/ experiments — NYU Depth V2 + ViT-B/16
+# Tested with Python 3.10
+#
+# Quick install (CPU / MPS):
+#   pip install -r depth/requirements.txt
+#
+# CUDA 11.8:
+#   pip install --index-url https://download.pytorch.org/whl/cu118 \
+#       torch==2.6.0 torchvision==0.21.0
+#   pip install -r depth/requirements.txt
+#
+# CUDA 12.1:
+#   pip install --index-url https://download.pytorch.org/whl/cu121 \
+#       torch==2.6.0 torchvision==0.21.0
+#   pip install -r depth/requirements.txt
+
+# Core
+torch==2.6.0
+torchvision==0.21.0
+git+https://github.com/rwightman/pytorch-image-models@9ee846ff0cbbc05a99b45140aa6d84083bcf6488
+
+# Science / plotting
+numpy==1.26.4
+scipy==1.11.4
+matplotlib==3.8.2
+
+# Logging and data
+wandb==0.19.11
+datasets==2.19.2
+Pillow==10.3.0
