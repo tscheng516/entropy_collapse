@@ -27,4 +27,4 @@ matplotlib==3.8.2
 # Logging and data
 wandb==0.19.11
 datasets==2.19.2
-Pillow==10.3.0
+Pillow==12.2.0
