@@ -214,7 +214,20 @@ dtype_map = {
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
 }
-ptdtype = dtype_map.get(cfg.dtype, torch.float32)
+_FP8_ALIASES = {"float8", "float8_e4m3fn", "float8_e5m2"}
+if cfg.dtype in _FP8_ALIASES:
+    # FP8 via torch.amp.autocast is not yet natively supported.
+    # Use NVIDIA TransformerEngine for true FP8 training on H100/H200.
+    # Falling back to bfloat16 for AMP.
+    if _is_master:
+        print(
+            f"[warn] dtype='{cfg.dtype}' — FP8 autocast is not natively supported "
+            "by torch.amp. Install TransformerEngine for true FP8 training. "
+            "Falling back to bfloat16."
+        )
+    ptdtype = torch.bfloat16
+else:
+    ptdtype = dtype_map.get(cfg.dtype, torch.float32)
 ctx = (
     nullcontext()
     if device == "cpu"
@@ -636,22 +649,18 @@ for iter_num in range(iter_num, cfg.max_iters):
     if iter_num % cfg.hessian_freq == 0:
         _raw_model.train()
         optimizer.zero_grad()
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
-        ) if device != "cpu" else nullcontext():
-            logits_h = _raw_model(X)
-            loss_for_hess = F.cross_entropy(logits_h, Y, label_smoothing=cfg.label_smoothing)
-
         try:
             curvature = get_curvature_metrics(
                 _raw_model,
                 optimizer,
                 X,
                 Y,
-                loss_for_hess,
                 vv_mask,
                 max_iter=cfg.hessian_max_iter,
                 compute_fd=cfg.compute_fd,
+                hessian_batch_size=cfg.hessian_batch_size,
+                use_grad_ckpt=cfg.use_grad_ckpt,
+                label_smoothing=cfg.label_smoothing,
             )
         except Exception as exc:
             if _is_master:
@@ -711,13 +720,18 @@ for iter_num in range(iter_num, cfg.max_iters):
                 f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
             )
             if iter_num % cfg.hessian_freq == 0:
-                print(
+                _cmsg = (
                     f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
                     f"| H_VV {curvature['hessian_vv']:.3f} | GN {curvature['gn']:.3f} "
-                    f"| BFGS {curvature['bfgs']:.3f} | FD {curvature['fd']:.3f} "
-                    f"| DiagH {curvature['diag_h']:.3f} | Fisher {curvature['fisher']:.3f} "
-                    f"| KFAC {curvature['kfac']:.3f}"
+                    f"| DiagH {curvature['diag_h']:.3f} | Fisher {curvature['fisher']:.3f}"
                 )
+                if cfg.compute_fd:
+                    _cmsg += (
+                        f" | BFGS {curvature['bfgs']:.3f}"
+                        f" | FD {curvature['fd']:.3f}"
+                        f" | KFAC {curvature['kfac']:.3f}"
+                    )
+                print(_cmsg)
         if cfg.wandb_log and (not use_ddp or rank == 0):
             log_dict: dict = {
                 "train/loss": loss_val,
@@ -731,13 +745,18 @@ for iter_num in range(iter_num, cfg.max_iters):
                         "hessian/prec_H": curvature["prec_h"],
                         "hessian/H_VV": curvature["hessian_vv"],
                         "hessian/GN": curvature["gn"],
-                        "hessian/FD": curvature["fd"],
                         "hessian/diag_H": curvature["diag_h"],
                         "hessian/fisher": curvature["fisher"],
-                        "hessian/BFGS": curvature["bfgs"],
-                        "hessian/KFAC": curvature["kfac"],
                     }
                 )
+                if cfg.compute_fd:
+                    log_dict.update(
+                        {
+                            "hessian/FD": curvature["fd"],
+                            "hessian/BFGS": curvature["bfgs"],
+                            "hessian/KFAC": curvature["kfac"],
+                        }
+                    )
             if iter_num % cfg.entropy_freq == 0:
                 log_dict.update(
                     {

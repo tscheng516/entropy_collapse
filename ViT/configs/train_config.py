@@ -128,8 +128,11 @@ class TrainConfig:
     # Compute all nine curvature proxies every N iterations.
     hessian_max_iter: int = 10
     # Power-iteration steps for λ_max estimation.
+    hessian_batch_size: int = 128
+    # Samples sliced from the training batch for curvature estimation.
+    # Smaller values reduce peak GPU memory; 128 is sufficient for λ_max tracking.
     compute_fd: bool = False
-    # Enable finite-difference proxies (BFGS, FD); costs an extra fwd/bwd pass.
+    # Enable finite-difference proxies (BFGS, FD) and K-FAC; costs extra passes.
 
     # ------------------------------------------------------------------ #
     # Attention entropy
@@ -148,10 +151,16 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     device: str = "cuda"                # 'cuda' | 'cpu' | 'mps'
     compile: bool = False               # disable when computing 2nd-order grads
-    dtype: str = "float32"              # 'float32' | 'bfloat16'
+    dtype: str = "bfloat16"             # 'float32' | 'bfloat16' | 'float16' | 'float8'
+    use_grad_ckpt: bool = False         # gradient checkpointing for HVP forward pass
     seed: int = 1337
 
     def __post_init__(self) -> None:
+        _VALID_DTYPES = {"float32", "bfloat16", "float16", "float8"}
+        if self.dtype not in _VALID_DTYPES:
+            raise ValueError(
+                f"dtype must be one of {sorted(_VALID_DTYPES)}, got '{self.dtype}'."
+            )
         ds = self.dataset.lower()
         defaults = _DATASET_DEFAULTS.get(ds)
         if defaults is None:
@@ -309,6 +318,9 @@ class ViTLargeCIFAR100Config(TrainConfig):
     lr_decay_iters: int = 50000
     min_lr: float = 3e-6
 
+    # ----- Compute -----
+    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
+
     # ----- Output -----
     out_dir: str = "out/cifar100/vitl16"
     wandb_project: str = "entropy-collapse-cifar100"
@@ -357,6 +369,9 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     lr_decay_iters: int = 50000
     min_lr: float = 3e-6
 
+    # ----- Compute -----
+    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
+
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vitl16"
     wandb_project: str = "entropy-collapse-imagenet1k"
@@ -403,6 +418,9 @@ class ViTHugeCIFAR100Config(TrainConfig):
     warmup_iters: int = 2000
     lr_decay_iters: int = 50000
     min_lr: float = 1e-6
+
+    # ----- Compute -----
+    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
 
     # ----- Output -----
     out_dir: str = "out/cifar100/vith14"
@@ -451,6 +469,9 @@ class ViTHugeImageNet1kConfig(TrainConfig):
     warmup_iters: int = 5000
     lr_decay_iters: int = 50000
     min_lr: float = 1e-6
+
+    # ----- Compute -----
+    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vith14"

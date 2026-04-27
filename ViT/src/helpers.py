@@ -8,17 +8,19 @@ Hessian matrix; instead we use power iteration on Hessian-vector products
 Functions
 ---------
 get_VV_subspace_mask     — Binary mask selecting value-projection params.
-get_curvature_metrics    — All nine sharpness proxies as spectral norms:
+get_curvature_metrics    — Six always-active sharpness proxies plus three
+                             optional (compute_fd=True) ones:
                              hessian (exact H), prec_h (preconditioned H),
                              hessian_vv (value-projection subspace H),
-                             gn (Gauss-Newton), bfgs (central-diff FD),
-                             fd (forward-diff FD), diag_h (diagonal Hessian),
-                             fisher (empirical Fisher), kfac (K-FAC).
+                             gn (Gauss-Newton), diag_h (diagonal Hessian),
+                             fisher (empirical Fisher)
+                             (+ bfgs, fd, kfac when compute_fd=True).
 get_attention_entropy    — Per-layer Shannon entropy of cached attention.
 """
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -138,68 +140,125 @@ def get_curvature_metrics(
     optimizer: torch.optim.Optimizer,
     X: torch.Tensor,
     Y: torch.Tensor,
-    loss: torch.Tensor,
     vv_mask: torch.Tensor,
     max_iter: int = 10,
     compute_fd: bool = False,
+    hessian_batch_size: int = 128,
+    use_grad_ckpt: bool = True,
+    label_smoothing: float = 0.1,
 ) -> dict[str, float]:
     """
-    Compute nine sharpness proxies for the current model state.
+    Compute sharpness proxies for the current model state.
 
-    The proxies are all spectral norms (λ_max estimates) estimated via power iteration,
-    except where noted otherwise (diagonal Hessian via Hutchinson estimation, K-FAC via
-    power iteration on smaller covariance factors).
+    Always-active proxies (six):
+      * ``hessian``    — λ_max(H) via power iteration on the full Hessian.
+      * ``prec_h``     — λ_max(D^{-½} H D^{-½}) Adam-preconditioned Hessian.
+                         Falls back to ``hessian`` for SGD.
+      * ``hessian_vv`` — λ_max(H_VV), H restricted to value-projection subspace.
+      * ``gn``         — λ_max(H_GN = J^T H_L J) Gauss-Newton matrix.
+      * ``diag_h``     — max(diag(H)) via Bekas–Kokiopoulou–Saad Hutchinson
+                         diagonal estimator.
+      * ``fisher``     — λ_max(F) empirical Fisher, via JVP/VJP power iteration.
 
-    * ``hessian``    — λ_max of the full loss Hessian H.
-    * ``prec_h``     — λ_max of the Adam-preconditioned Hessian
-                       D^{-½} H D^{-½}  (where D = diag of Adam's v̂).
-                       Falls back to ``hessian`` for SGD.
-    * ``hessian_vv`` — λ_max of H restricted to the value-projection
-                       subspace (H_VV).
-    * ``gn``         — λ_max of the Gauss-Newton matrix H_GN, computed
-                       via JVP / VJP factorisation.
-    * ``bfgs``       — λ_max(H) estimated via central-difference finite diffs
-                       (O(ε²) accurate).
-    * ``fd``         — λ_max(H) estimated via forward-difference finite diffs
-                       (O(ε) accurate, half the cost of BFGS).
-                       Both ``bfgs`` and ``fd`` are only computed when
-                       ``compute_fd=True``.
-    * ``diag_h``     — max(diag(H)), the largest diagonal entry of H,
-                       estimated via the Bekas–Kokiopoulou–Saad
-                       Hutchinson diagonal estimator with Rademacher
-                       random vectors.
-    * ``fisher``     — λ_max of the empirical Fisher information matrix
-                       F = (1/B) Σ_i g_i g_i^T, estimated via power
-                       iteration on Fisher-vector products (JVP/VJP on
-                       per-sample losses).
-    * ``kfac``       — Kronecker-Factored Approximate Curvature (K-FAC)
-                       proxy: max Kronecker-factor eigenvalue product
-                       across all linear layers, estimated from cached
-                       input activations and output-gradient covariances.
+    Optional proxies (compute_fd=True):
+      * ``bfgs``  — λ_max(H) via central-difference finite differences (O(ε²)).
+      * ``fd``    — λ_max(H) via forward-difference finite differences (O(ε)).
+      * ``kfac``  — K-FAC proxy: max λ_max(A)·λ_max(G) across all Linear layers.
+
+    Memory optimisations vs original:
+      1. ``hessian_batch_size`` samples are sliced from X/Y before any
+         computation.  All proxies share this smaller diagnostic batch, keeping
+         peak activation memory (O(batch × seq_len²)) bounded.
+      2. ``hessian``, ``hessian_vv``, ``prec_h``, and ``diag_h`` share a
+         **single** ``create_graph=True`` forward pass and first-order gradient
+         graph.  The graph is released once, after all four proxies finish.
+      3. ``use_grad_ckpt`` activates timm's built-in gradient checkpointing on
+         the transformer blocks for the shared HVP forward pass, reducing peak
+         activation memory from O(depth) to O(sqrt(depth)) layers.
+      4. K-FAC is gated behind ``compute_fd`` (disabled by default).
 
     Args:
-        model:      Model with a live computation graph.
-        optimizer:  Current optimiser (used to read Adam's second moment).
-        X:          Batch of input images  (B, C, H, W).
-        Y:          Batch of class labels  (B,) — integer class indices.
-        loss:       Scalar loss with a live graph (must have been computed
-                    with ``create_graph=True`` or retain_graph available).
-        vv_mask:    Output of ``get_VV_subspace_mask(model)``.
-        max_iter:   Power-iteration steps.
-        compute_fd: Whether to compute finite-difference proxies
-                (both ``bfgs`` and ``fd``).
+        model:              Model, unwrapped from DDP.
+        optimizer:          Current optimiser (used to read Adam second moment).
+        X:                  Training-batch images  (B, C, H, W).
+        Y:                  Training-batch labels  (B,).
+        vv_mask:            Output of ``get_VV_subspace_mask(model)``.
+        max_iter:           Power-iteration steps for λ_max estimation.
+        compute_fd:         Enable finite-difference proxies (bfgs, fd) and
+                            K-FAC.  Each costs at least one extra forward/
+                            backward pass.
+        hessian_batch_size: Number of samples drawn from X/Y for curvature
+                            estimation.  Reduces peak GPU memory in proportion
+                            to batch reduction; 128 is sufficient for λ_max
+                            trend monitoring.
+        use_grad_ckpt:      If True and the model exposes
+                            ``set_grad_checkpointing()``, enable gradient
+                            checkpointing on the transformer blocks for the
+                            shared HVP forward pass.
+        label_smoothing:    Applied to the diagnostic CE loss (should match
+                            cfg.label_smoothing for consistent curvature scale).
 
     Returns:
-        Dict with keys: ``hessian``, ``prec_h``, ``hessian_vv``,
-        ``gn``, ``fd``, ``diag_h``, ``fisher``, ``bfgs``, ``kfac``.
+        Dict with keys: ``hessian``, ``prec_h``, ``hessian_vv``, ``gn``,
+        ``fd``, ``diag_h``, ``fisher``, ``bfgs``, ``kfac``
+        (``fd`` / ``bfgs`` / ``kfac`` are 0.0 when ``compute_fd=False``).
     """
+    # ------------------------------------------------------------------ #
+    # Diagnostic mini-batch.
+    # All proxies operate on this slice so that the retained activation
+    # memory (proportional to batch size) stays bounded.
+    # ------------------------------------------------------------------ #
+    Xc = X[:hessian_batch_size].detach()
+    Yc = Y[:hessian_batch_size].detach()
+
+    # Shared parameter containers used by GN and Fisher later.
+    params_keys = [k for k, _ in model.named_parameters()]
+    params_vals = [p for _, p in model.named_parameters()]
+    flat_params = torch.cat([p.reshape(-1) for p in params_vals])
+
+    # ------------------------------------------------------------------ #
+    # Shared forward pass for HVP-based proxies (H, H_VV, prec_H, diag_H).
+    #
+    # Fused / flash attention kernels are disabled so that second-order
+    # autograd can traverse the explicit softmax graph correctly (the
+    # patched attention already uses the explicit path, but the sdp_kernel
+    # context guards against any timm version that might re-enable it).
+    #
+    # Gradient checkpointing (via timm's set_grad_checkpointing) reduces
+    # peak activation memory by recomputing layer outputs during HVP
+    # backward passes instead of storing them all simultaneously.
+    # ------------------------------------------------------------------ #
+    _sdp_ctx = (
+        torch.backends.cuda.sdp_kernel(
+            enable_flash=False, enable_mem_efficient=False, enable_math=True
+        )
+        if Xc.is_cuda
+        else nullcontext()
+    )
+    _ckpt_enabled = use_grad_ckpt and hasattr(model, "set_grad_checkpointing")
+    if _ckpt_enabled:
+        model.set_grad_checkpointing(True)
+    try:
+        with _sdp_ctx:
+            logits_h = model(Xc)
+    finally:
+        if _ckpt_enabled:
+            model.set_grad_checkpointing(False)
+    loss = F.cross_entropy(logits_h, Yc, label_smoothing=label_smoothing)
+    del logits_h  # free; the scalar loss node retains the graph
+
+    # ------------------------------------------------------------------ #
+    # Shared first-order gradient graph.
+    # H, H_VV, prec_H, and diag_H all reuse this single graph via
+    # retain_graph=True and release it together after diag_H finishes.
+    # ------------------------------------------------------------------ #
     grads = torch.autograd.grad(
         loss, model.parameters(), create_graph=True, retain_graph=True
     )
     flat_grads = torch.cat([g.reshape(-1) for g in grads])
 
     # ------------------------------------------------------------------ #
-    # 1. Exact Hessian Power Iteration (H)
+    # 1. Hessian Power Iteration  λ_max(H)
     # ------------------------------------------------------------------ #
     v_h = torch.randn_like(flat_grads)
     v_h = v_h / (v_h.norm() + 1e-9)
@@ -213,7 +272,7 @@ def get_curvature_metrics(
     hessian_norm = torch.dot(v_h, flat_hvp).item() if flat_hvp is not None else 0.0
 
     # ------------------------------------------------------------------ #
-    # 2. Value-Subspace Power Iteration (H_VV)
+    # 2. Value-subspace Power Iteration  λ_max(H_VV)
     # ------------------------------------------------------------------ #
     vv_mask_dev = vv_mask.to(flat_grads.device)
     v_vv = torch.randn_like(flat_grads) * vv_mask_dev
@@ -231,7 +290,7 @@ def get_curvature_metrics(
     )
 
     # ------------------------------------------------------------------ #
-    # 3. Preconditioned Hessian Power Iteration (H_tilde)
+    # 3. Adam-preconditioned Hessian  λ_max(D^{-½} H D^{-½})
     # ------------------------------------------------------------------ #
     D_inv_sqrt_parts = []
     is_adam = False
@@ -271,35 +330,57 @@ def get_curvature_metrics(
     else:
         prec_hessian_norm = hessian_norm
 
-    del grads, flat_grads, v_h, flat_hvp, v_vv, flat_hvp_vv, D_inv_sqrt
+    # ------------------------------------------------------------------ #
+    # 4. Diagonal Hessian  max(diag(H))  — Hutchinson estimator
+    #
+    # Runs here (before releasing flat_grads) so it shares the single
+    # computation graph with proxies 1–3. This avoids a second forward
+    # pass for this proxy.
+    # ------------------------------------------------------------------ #
+    diag_h_norm = 0.0
+    n_hutchinson = max(1, max_iter // 2)
+    try:
+        diag_acc = torch.zeros_like(flat_grads)
+        for _ in range(n_hutchinson):
+            z = (
+                torch.randint(
+                    0, 2, flat_grads.shape, device=flat_grads.device
+                ).float()
+                * 2.0
+                - 1.0
+            )
+            hz = torch.autograd.grad(
+                flat_grads, model.parameters(), grad_outputs=z, retain_graph=True
+            )
+            flat_hz = torch.cat([g.contiguous().reshape(-1) for g in hz])
+            diag_acc += z * flat_hz  # z_i · (Hz)_i ≈ H_ii
+        diag_acc /= n_hutchinson
+        diag_h_norm = diag_acc.max().item()
+        del diag_acc
+    except Exception:
+        pass
+
+    # Release the shared computation graph — all four HVP proxies are done.
+    del grads, flat_grads, v_h, flat_hvp, v_vv, flat_hvp_vv, D_inv_sqrt, loss
     if is_adam:
         del v_prec, step3
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 4. Gauss-Newton  (H_GN = J^T H_L J)
+    # 5. Gauss-Newton  λ_max(H_GN = J^T H_L J)
     #
-    # torch.func.jvp / vjp require pure, side-effect-free functions.
-    # _patched_attn_forward writes self.last_att = attn.detach() on every
-    # call, which corrupts the functorch tracing state and eventually
-    # causes CUDA context corruption.  torch.autograd.functional.jvp /
-    # vjp run through the standard autograd engine and tolerate such
-    # module-state side effects.
+    # Uses autograd_functional.jvp/vjp (not torch.func) to tolerate the
+    # module-state side-effects of the patched attention forward.
     # ------------------------------------------------------------------ #
-    params_keys = [k for k, _ in model.named_parameters()]
-    params_vals = [p for _, p in model.named_parameters()]
-
     def _fwd_tuple(*p_vals: torch.Tensor) -> torch.Tensor:
         """Forward pass with parameters supplied as a flat tuple."""
         p_dict = {k: v for k, v in zip(params_keys, p_vals)}
-        return functional_call(model, p_dict, (X,))
+        return functional_call(model, p_dict, (Xc,))
 
-    flat_params = torch.cat([p.reshape(-1) for p in params_vals])
     v_g = torch.randn_like(flat_params)
     v_g = v_g / (v_g.norm() + 1e-9)
     flat_gn_v: torch.Tensor | None = None
     for _ in range(max_iter):
-        # ---- JVP: Jv = J @ v ----
         tangents_list: list[torch.Tensor] = []
         offset = 0
         for p in params_vals:
@@ -311,18 +392,14 @@ def get_curvature_metrics(
             _fwd_tuple, tuple(params_vals), tuple(tangents_list), create_graph=False
         )
 
-        # Ensure out_logits is a leaf tensor so torch.autograd.grad can
-        # differentiate w.r.t. it.  detach() first in case jvp produced a
-        # non-leaf with requires_grad=False (double-backward internals).
         if not out_logits.requires_grad:
             out_logits = out_logits.detach().requires_grad_(True)
 
         num_classes = out_logits.size(-1)
-        l = F.cross_entropy(out_logits.reshape(-1, num_classes), Y.reshape(-1))
+        l = F.cross_entropy(out_logits.reshape(-1, num_classes), Yc.reshape(-1))
         grad_l = torch.autograd.grad(l, out_logits, create_graph=True)[0]
         H_L_Jv = torch.autograd.grad(grad_l, out_logits, grad_outputs=Jv.detach())[0]
 
-        # ---- VJP: J^T @ (H_L @ Jv) ----
         _, gn_tuple = autograd_functional.vjp(
             _fwd_tuple, tuple(params_vals), H_L_Jv.detach()
         )
@@ -339,64 +416,25 @@ def get_curvature_metrics(
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 5. Diagonal Hessian  max(diag(H))  — Bekas–Kokiopoulou–Saad
-    #
-    # Estimate the diagonal of H via the Hutchinson diagonal estimator:
-    #   d̂_i = E_z[ z_i · (Hz)_i ]  where z ~ Rademacher(±1).
-    # Then report max_i(d̂_i) — the largest per-parameter curvature.
-    # This is λ_max(diag(H)), a spectral quantity comparable to the
-    # other λ_max proxies.
-    #
-    # NOTE: This MUST run before the BFGS / FD sections (7, 9) which
-    # perturb parameters in-place and would invalidate the live
-    # computation graph of ``loss``.
-    # ------------------------------------------------------------------ #
-    diag_h_norm = 0.0
-    n_hutchinson = max(1, max_iter // 2)
-    try:
-        grads_diag = torch.autograd.grad(
-            loss, model.parameters(), create_graph=True, retain_graph=True
-        )
-        flat_grads_diag = torch.cat([g.reshape(-1) for g in grads_diag])
-        diag_acc = torch.zeros_like(flat_grads_diag)
-        for _ in range(n_hutchinson):
-            z = torch.randint(0, 2, flat_grads_diag.shape, device=flat_grads_diag.device).float() * 2.0 - 1.0
-            hz = torch.autograd.grad(
-                flat_grads_diag, model.parameters(), grad_outputs=z, retain_graph=True
-            )
-            flat_hz = torch.cat([g.contiguous().reshape(-1) for g in hz])
-            diag_acc += z * flat_hz          # element-wise: z_i·(Hz)_i ≈ H_ii
-        diag_acc /= n_hutchinson
-        diag_h_norm = diag_acc.max().item()  # λ_max(diag(H))
-        del grads_diag, flat_grads_diag, diag_acc
-    except Exception:
-        pass
-    torch.cuda.empty_cache()
-
-    # ------------------------------------------------------------------ #
     # 6. Empirical Fisher  λ_max(F)  via power iteration
     #
-    # F = (1/B) Σ_i g_i g_i^T  where g_i = ∂ℓ_i/∂θ (per-sample grad).
-    # Fisher-vector product:  Fv = (1/B) J_ℓ^T (J_ℓ v)
-    # where J_ℓ is the (B×P) Jacobian of per-sample losses w.r.t. θ.
-    # We compute J_ℓ v via JVP on per-sample losses and J_ℓ^T(·) via VJP,
-    # using the same autograd_functional pattern as the GN section.
+    # F = (1/B) Σ_i g_i g_i^T  where g_i = ∂ℓ_i/∂θ.
+    # Fisher-vector product: Fv = (1/B) J_ℓ^T (J_ℓ v).
     # ------------------------------------------------------------------ #
     fisher_norm = 0.0
     try:
         def _fwd_loss_tuple(*p_vals: torch.Tensor) -> torch.Tensor:
             """Per-sample cross-entropy (reduction='none')."""
             p_dict = {k: v for k, v in zip(params_keys, p_vals)}
-            logits = functional_call(model, p_dict, (X,))
-            return F.cross_entropy(logits, Y, reduction="none")  # (B,)
+            logits = functional_call(model, p_dict, (Xc,))
+            return F.cross_entropy(logits, Yc, reduction="none")  # (B,)
 
-        B = X.size(0)
+        B = Xc.size(0)
         v_f = torch.randn_like(flat_params)
         v_f = v_f / (v_f.norm() + 1e-9)
         flat_fv: torch.Tensor | None = None
 
         for _ in range(max_iter):
-            # JVP: J_ℓ v → (B,) per-sample directional derivatives
             tangents_f: list[torch.Tensor] = []
             offset = 0
             for p in params_vals:
@@ -407,9 +445,8 @@ def get_curvature_metrics(
             _, Jv_f = autograd_functional.jvp(
                 _fwd_loss_tuple, tuple(params_vals), tuple(tangents_f),
                 create_graph=False,
-            )  # Jv_f: (B,)
+            )  # (B,)
 
-            # VJP: J_ℓ^T (Jv_f) → (1/B) Fisher-vector product
             _, vjp_f = autograd_functional.vjp(
                 _fwd_loss_tuple, tuple(params_vals), Jv_f.detach(),
             )
@@ -431,13 +468,7 @@ def get_curvature_metrics(
     torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 7. BFGS (Central-Difference Spectral) — λ_max(H) via finite diffs
-    #
-    # Power iteration where HVPs are approximated by central differences
-    #   Hv ≈ [∇L(w + εv) − ∇L(w − εv)] / (2ε)
-    # This is O(ε²) accurate and provides a spectral λ_max estimate
-    # without relying on autograd second-order graphs.
-    # Non-destructive: parameters are perturbed then restored.
+    # 7. BFGS (Central-Difference)  λ_max(H) — only when compute_fd=True
     # ------------------------------------------------------------------ #
     bfgs_norm = 0.0
     if compute_fd:
@@ -448,7 +479,6 @@ def get_curvature_metrics(
             flat_bv: torch.Tensor | None = None
 
             for _ in range(max_iter):
-                # ---- +ε perturbation ----
                 offset = 0
                 for p in params_vals:
                     numel = p.numel()
@@ -456,13 +486,12 @@ def get_curvature_metrics(
                     offset += numel
 
                 optimizer.zero_grad()
-                loss_bp = F.cross_entropy(model(X), Y)
+                loss_bp = F.cross_entropy(model(Xc), Yc)
                 loss_bp.backward()
                 g_plus = torch.cat(
                     [p.grad.reshape(-1).clone() for p in model.parameters()]
                 )
 
-                # ---- −ε perturbation  (shift by −2ε from current +ε state) ----
                 offset = 0
                 for p in params_vals:
                     numel = p.numel()
@@ -470,13 +499,12 @@ def get_curvature_metrics(
                     offset += numel
 
                 optimizer.zero_grad()
-                loss_bm = F.cross_entropy(model(X), Y)
+                loss_bm = F.cross_entropy(model(Xc), Yc)
                 loss_bm.backward()
                 g_minus = torch.cat(
                     [p.grad.reshape(-1).clone() for p in model.parameters()]
                 )
 
-                # ---- Restore original parameters ----
                 offset = 0
                 for p in params_vals:
                     numel = p.numel()
@@ -499,90 +527,79 @@ def get_curvature_metrics(
         torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 8. K-FAC Proxy  (Kronecker-Factored Approximate Curvature)
+    # 8. K-FAC Proxy — only when compute_fd=True
     #
-    # For each Linear layer we estimate two small covariance factors:
-    #   A = (1/B) a a^T   (input activations, registered via forward hook)
-    #   G = (1/B) δ δ^T   (output gradients, registered via backward hook)
-    # The K-FAC block curvature is  A ⊗ G  whose largest eigenvalue is
-    # λ_max(A) · λ_max(G).  We report the maximum across layers.
+    # Estimates max λ_max(A) · λ_max(G) across all Linear layers.
     # ------------------------------------------------------------------ #
     kfac_norm = 0.0
-    try:
-        a_cache: dict[str, torch.Tensor] = {}
-        g_cache: dict[str, torch.Tensor] = {}
-        handles = []
+    if compute_fd:
+        try:
+            a_cache: dict[str, torch.Tensor] = {}
+            g_cache: dict[str, torch.Tensor] = {}
+            handles = []
 
-        for name, mod in model.named_modules():
-            if isinstance(mod, torch.nn.Linear):
-                _name = name
+            for name, mod in model.named_modules():
+                if isinstance(mod, torch.nn.Linear):
+                    _name = name
 
-                def _fwd_hook(m, inp, out, _n=_name):
-                    a_cache[_n] = inp[0].detach()
+                    def _fwd_hook(m, inp, out, _n=_name):
+                        a_cache[_n] = inp[0].detach()
 
-                def _bwd_hook(m, grad_in, grad_out, _n=_name):
-                    g_cache[_n] = grad_out[0].detach()
+                    def _bwd_hook(m, grad_in, grad_out, _n=_name):
+                        g_cache[_n] = grad_out[0].detach()
 
-                handles.append(mod.register_forward_hook(_fwd_hook))
-                handles.append(mod.register_full_backward_hook(_bwd_hook))
+                    handles.append(mod.register_forward_hook(_fwd_hook))
+                    handles.append(mod.register_full_backward_hook(_bwd_hook))
 
-        optimizer.zero_grad()
-        logits_kfac = model(X)
-        loss_kfac = F.cross_entropy(logits_kfac, Y)
-        loss_kfac.backward()
-        optimizer.zero_grad()
+            optimizer.zero_grad()
+            logits_kfac = model(Xc)
+            loss_kfac = F.cross_entropy(logits_kfac, Yc)
+            loss_kfac.backward()
+            optimizer.zero_grad()
 
-        for h in handles:
-            h.remove()
+            for h in handles:
+                h.remove()
 
-        max_kfac = 0.0
-        for name in a_cache:
-            if name not in g_cache:
-                continue
-            a = a_cache[name]  # (B, ..., d_in)
-            g = g_cache[name]  # (B, ..., d_out)
-            if a.ndim == 3:
-                a = a.reshape(-1, a.size(-1))
-            if g.ndim == 3:
-                g = g.reshape(-1, g.size(-1))
-            n_samples = a.size(0)
+            max_kfac = 0.0
+            for name in a_cache:
+                if name not in g_cache:
+                    continue
+                a = a_cache[name]
+                g = g_cache[name]
+                if a.ndim == 3:
+                    a = a.reshape(-1, a.size(-1))
+                if g.ndim == 3:
+                    g = g.reshape(-1, g.size(-1))
+                n_samples = a.size(0)
 
-            # Covariance factor eigenvalues via power iteration (cheap)
-            def _top_eig(M: torch.Tensor, iters: int = 5) -> float:
-                v = torch.randn(M.size(0), 1, device=M.device)
-                for _ in range(iters):
-                    v = M @ v
-                    v = v / (v.norm() + 1e-9)
-                return (v.t() @ M @ v).item()
+                def _top_eig(M: torch.Tensor, iters: int = 5) -> float:
+                    v = torch.randn(M.size(0), 1, device=M.device)
+                    for _ in range(iters):
+                        v = M @ v
+                        v = v / (v.norm() + 1e-9)
+                    return (v.t() @ M @ v).item()
 
-            A_cov = (a.t() @ a) / n_samples
-            G_cov = (g.t() @ g) / n_samples
-            lam_A = _top_eig(A_cov)
-            lam_G = _top_eig(G_cov)
-            max_kfac = max(max_kfac, lam_A * lam_G)
+                A_cov = (a.t() @ a) / n_samples
+                G_cov = (g.t() @ g) / n_samples
+                lam_A = _top_eig(A_cov)
+                lam_G = _top_eig(G_cov)
+                max_kfac = max(max_kfac, lam_A * lam_G)
 
-        kfac_norm = max_kfac
-        del a_cache, g_cache
-    except Exception:
-        pass
-    torch.cuda.empty_cache()
+            kfac_norm = max_kfac
+            del a_cache, g_cache
+        except Exception:
+            pass
+        torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------ #
-    # 9. FD (Forward-Difference Spectral) — λ_max(H) via finite diffs
-    #
-    # Power iteration where HVPs are approximated by forward differences
-    #   Hv ≈ [∇L(w + εv) − ∇L(w)] / ε
-    # O(ε) accurate, half the cost of central differences (BFGS, section 7).
-    # Comparing BFGS (central) vs FD (forward) reveals FD-accuracy
-    # sensitivity.  Non-destructive: parameters are restored each step.
+    # 9. FD (Forward-Difference)  λ_max(H) — only when compute_fd=True
     # ------------------------------------------------------------------ #
     fd_norm = 0.0
     if compute_fd:
         try:
             eps_fd = 1e-4
-            # Base gradient at unperturbed parameters
             optimizer.zero_grad()
-            loss_f0 = F.cross_entropy(model(X), Y)
+            loss_f0 = F.cross_entropy(model(Xc), Yc)
             loss_f0.backward()
             g_base = torch.cat(
                 [p.grad.reshape(-1).clone() for p in model.parameters()]
@@ -593,7 +610,6 @@ def get_curvature_metrics(
             flat_fdv: torch.Tensor | None = None
 
             for _ in range(max_iter):
-                # +ε perturbation
                 offset = 0
                 for p in params_vals:
                     numel = p.numel()
@@ -601,13 +617,12 @@ def get_curvature_metrics(
                     offset += numel
 
                 optimizer.zero_grad()
-                loss_fp = F.cross_entropy(model(X), Y)
+                loss_fp = F.cross_entropy(model(Xc), Yc)
                 loss_fp.backward()
                 g_pert = torch.cat(
                     [p.grad.reshape(-1).clone() for p in model.parameters()]
                 )
 
-                # Restore original parameters
                 offset = 0
                 for p in params_vals:
                     numel = p.numel()
