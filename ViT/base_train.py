@@ -267,7 +267,7 @@ if rank == 0:
 # ---------------------------------------------------------------------------
 from src.data_utils import load_data, infinite_loader  
 
-train_loader, val_loader = load_data(
+train_loader, val_loader, train_sampler = load_data(
     dataset=cfg.dataset,
     data_dir=cfg.data_dir,
     img_size=cfg.img_size,
@@ -275,7 +275,7 @@ train_loader, val_loader = load_data(
     num_workers=cfg.num_workers,
 )
 
-train_iter = infinite_loader(train_loader)
+train_iter = infinite_loader(train_loader, train_sampler)
 if _is_master:
     print(
         f"[data] dataset={cfg.dataset}  "

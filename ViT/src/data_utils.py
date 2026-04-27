@@ -19,7 +19,7 @@ import warnings
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, DistributedSampler
 import torchvision
 import torchvision.transforms as T
 from PIL import ImageFile
@@ -90,22 +90,29 @@ def load_data(
     batch_size: int,
     num_workers: int = 8,
     pin_memory: bool = True,
-) -> tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
     """
     Build train and validation ``DataLoader`` objects for the chosen dataset.
+
+    In DDP mode (``WORLD_SIZE > 1``) the train loader uses a
+    ``DistributedSampler`` so each rank receives a disjoint shard of the
+    dataset (effective per-GPU batch = ``batch_size / world_size``).
+    The sampler is returned as the third element so callers can call
+    ``sampler.set_epoch(epoch)`` to re-shuffle across epochs.
 
     Args:
         dataset:     One of ``'cifar10'``, ``'cifar100'``, ``'imagenet'``,
              ``'imagenet1k'``, ``'imagenet_hf'``.
         data_dir:    Root directory for data storage / ImageFolder tree.
         img_size:    Spatial size fed to the model (images are resized).
-        batch_size:  Images per batch.
+        batch_size:  Per-GPU batch size (passed directly to DataLoader).
         num_workers: DataLoader worker processes.
         pin_memory:  Pin DataLoader memory for faster GPU transfer.
 
     Returns:
-        train_loader: Iterable DataLoader yielding ``(images, labels)``.
-        val_loader:   Idem for validation.
+        train_loader:   Iterable DataLoader yielding ``(images, labels)``.
+        val_loader:     Idem for validation (full dataset on every rank).
+        train_sampler:  ``DistributedSampler`` when running DDP, else ``None``.
 
     Raises:
         ValueError: When ``dataset`` is not a recognised string.
@@ -205,10 +212,23 @@ def load_data(
         prefetch_factor=8 if num_workers > 0 else None,
     )
 
+    # In DDP mode each rank receives a disjoint shard via DistributedSampler;
+    # shuffle is delegated to the sampler (set per-epoch via set_epoch).
+    train_sampler: DistributedSampler | None = None
+    if _is_ddp:
+        train_sampler = DistributedSampler(
+            train_ds,
+            num_replicas=_world_size,
+            rank=_rank,
+            shuffle=True,
+            drop_last=True,
+        )
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),  # sampler and shuffle are mutually exclusive
+        sampler=train_sampler,
         drop_last=True,
         **_loader_kwargs,
     )
@@ -219,18 +239,26 @@ def load_data(
         drop_last=False,
         **_loader_kwargs,
     )
-    return train_loader, val_loader
+    return train_loader, val_loader, train_sampler
 
 
-def infinite_loader(loader: DataLoader):
+def infinite_loader(loader: DataLoader, sampler: DistributedSampler | None = None):
     """
     Wrap a DataLoader to yield batches indefinitely (epoch-cycling).
 
+    When a ``DistributedSampler`` is supplied, calls ``sampler.set_epoch``
+    at the start of each epoch so each rank sees a different shuffle order.
+
     Args:
-        loader: A finite DataLoader.
+        loader:  A finite DataLoader.
+        sampler: Optional ``DistributedSampler`` used by *loader*.
 
     Yields:
         ``(images, labels)`` tensors.
     """
+    epoch = 0
     while True:
+        if sampler is not None:
+            sampler.set_epoch(epoch)
         yield from loader
+        epoch += 1
