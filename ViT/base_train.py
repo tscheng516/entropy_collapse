@@ -771,6 +771,6 @@ if not use_ddp or rank == 0:
         hessian_freq=cfg.hessian_freq,
         entropy_freq=cfg.entropy_freq,
         skip_intv=True,
-        lam=100.0,
+        lam=10.0,
         compute_fd=cfg.compute_fd,
     )
