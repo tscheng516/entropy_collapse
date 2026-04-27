@@ -105,7 +105,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     optimizer: str = "adamw"            # 'adamw' | 'sgd'
     learning_rate: float = 1e-3
-    max_iters: int = 50000
+    max_iters: int = 1000
     weight_decay: float = 0.05
     beta1: float = 0.9
     beta2: float = 0.999
