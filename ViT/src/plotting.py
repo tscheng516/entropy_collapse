@@ -817,13 +817,13 @@ def plot_training_dynamics(
         # --- Col 0: train/eval loss ---
         ax_loss = axs[row, 0]
         loss_arr = _as1d("loss")
-        ax_loss.plot(loss_arr, color=color, linewidth=2, label=f"{name} train loss")
+        ax_loss.plot(loss_arr, color=color, linewidth=2, label=f"train loss")
         _sparse_or_dense(
             h.get("val_loss", []),
-            dense_color="crimson", dense_label=f"{name} val loss",
+            dense_color="crimson", dense_label=f"val loss",
             ax=ax_loss,
         )
-        ax_loss.set_title(f"{name} Loss")
+        ax_loss.set_title(f"Loss")
         ax_loss.set_xlabel("Iteration")
         ax_loss.set_ylabel("Cross-entropy loss")
         ax_loss.legend(loc="upper right")
@@ -834,13 +834,13 @@ def plot_training_dynamics(
         train_acc = _as1d("acc", "train_acc")
         if train_acc.size:
             ax_acc.plot(train_acc, color=color, linewidth=2,
-                        label=f"{name} train acc")
+                        label=f"train acc")
         _sparse_or_dense(
             h.get("val_acc", h.get("test_acc", [])),
-            dense_color="crimson", dense_label=f"{name} val acc",
+            dense_color="crimson", dense_label=f"val acc",
             ax=ax_acc,
         )
-        ax_acc.set_title(f"{name} Accuracy")
+        ax_acc.set_title(f"Accuracy")
         ax_acc.set_xlabel("Iteration")
         ax_acc.set_ylabel("Accuracy")
         ax_acc.yaxis.set_major_formatter(
