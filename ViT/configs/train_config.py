@@ -70,7 +70,7 @@ class TrainConfig:
     # ImageNet: directory with train/ and val/ in ImageFolder layout.
     # ImageNet HF: Hugging Face cache directory.
 
-    batch_size: int = 128
+    batch_size: int = 256
     num_workers: int = 8
 
     # ------------------------------------------------------------------ #
@@ -124,7 +124,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_freq: int = 500
+    hessian_freq: int = 100
     # Compute all nine curvature proxies every N iterations.
     hessian_max_iter: int = 10
     # Power-iteration steps for λ_max estimation.
@@ -134,7 +134,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_freq: int = 500
+    entropy_freq: int = 100
     # Compute per-layer attention entropy every N iterations.
 
     # ------------------------------------------------------------------ #
@@ -178,7 +178,7 @@ class ViTBaseCIFAR100Config(TrainConfig):
     # ----- Data -----
     dataset: str = "cifar100"
     num_classes: int = 100
-    batch_size: int = 128
+    batch_size: int = 256
 
     # ----- Image / patch -----
     img_size: int = 32
@@ -280,7 +280,7 @@ class ViTLargeCIFAR100Config(TrainConfig):
     # ----- Data -----
     dataset: str = "cifar100"
     num_classes: int = 100
-    batch_size: int = 64          # smaller batch; ViT-L is memory-heavy
+    batch_size: int = 256
 
     # ----- Image / patch -----
     img_size: int = 32
@@ -298,7 +298,7 @@ class ViTLargeCIFAR100Config(TrainConfig):
     label_smoothing: float = 0.1
 
     # ----- Optimiser -----
-    learning_rate: float = 5e-4   # lower LR for larger model
+    learning_rate: float = 3e-4   # lower LR for larger model
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -307,7 +307,7 @@ class ViTLargeCIFAR100Config(TrainConfig):
     max_iters: int = 50000
     warmup_iters: int = 2000
     lr_decay_iters: int = 50000
-    min_lr: float = 5e-6
+    min_lr: float = 3e-6
 
     # ----- Output -----
     out_dir: str = "out/cifar100_vitl16"
@@ -327,7 +327,7 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     # ----- Data -----
     dataset: str = "imagenet1k"
     num_classes: int = 1000
-    batch_size: int = 128         # reduced vs ViT-B to fit memory
+    batch_size: int = 256
     num_workers: int = 8
 
     # ----- Image / patch -----
@@ -346,7 +346,7 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     label_smoothing: float = 0.1
 
     # ----- Optimiser -----
-    learning_rate: float = 5e-4
+    learning_rate: float = 3e-4
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -355,7 +355,7 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     max_iters: int = 50000
     warmup_iters: int = 5000
     lr_decay_iters: int = 50000
-    min_lr: float = 5e-6
+    min_lr: float = 3e-6
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k_vitl16"
@@ -375,7 +375,7 @@ class ViTHugeCIFAR100Config(TrainConfig):
     # ----- Data -----
     dataset: str = "cifar100"
     num_classes: int = 100
-    batch_size: int = 32          # very large model; reduce further if OOM
+    batch_size: int = 256          # very large model; reduce further if OOM
 
     # ----- Image / patch -----
     img_size: int = 32
@@ -393,7 +393,7 @@ class ViTHugeCIFAR100Config(TrainConfig):
     label_smoothing: float = 0.1
 
     # ----- Optimiser -----
-    learning_rate: float = 3e-4   # conservative LR for very large model
+    learning_rate: float = 1e-4   # conservative LR for very large model
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -402,7 +402,7 @@ class ViTHugeCIFAR100Config(TrainConfig):
     max_iters: int = 50000
     warmup_iters: int = 2000
     lr_decay_iters: int = 50000
-    min_lr: float = 3e-6
+    min_lr: float = 1e-6
 
     # ----- Output -----
     out_dir: str = "out/cifar100_vith14"
@@ -422,7 +422,7 @@ class ViTHugeImageNet1kConfig(TrainConfig):
     # ----- Data -----
     dataset: str = "imagenet1k"
     num_classes: int = 1000
-    batch_size: int = 64
+    batch_size: int = 256
     num_workers: int = 8
 
     # ----- Image / patch -----
@@ -441,7 +441,7 @@ class ViTHugeImageNet1kConfig(TrainConfig):
     label_smoothing: float = 0.1
 
     # ----- Optimiser -----
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-4
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -450,7 +450,7 @@ class ViTHugeImageNet1kConfig(TrainConfig):
     max_iters: int = 50000
     warmup_iters: int = 5000
     lr_decay_iters: int = 50000
-    min_lr: float = 3e-6
+    min_lr: float = 1e-6
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k_vith14"
