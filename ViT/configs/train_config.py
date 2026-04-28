@@ -104,7 +104,7 @@ class TrainConfig:
     # Optimiser
     # ------------------------------------------------------------------ #
     optimizer: str = "adamw"            # 'adamw' | 'sgd'
-    learning_rate: float = 1e-3
+    learning_rate: float = 3e-4
     max_iters: int = 1000
     weight_decay: float = 0.05
     beta1: float = 0.9
@@ -205,16 +205,16 @@ class ViTBaseCIFAR100Config(TrainConfig):
     label_smoothing: float = 0.1
 
     # ----- Optimiser -----
-    learning_rate: float = 1e-3
+    learning_rate: float = 3e-4
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
 
     # ----- Schedule -----
-    max_iters: int = 50000
+    max_iters: int = 20000
     warmup_iters: int = 2000
-    lr_decay_iters: int = 50000
-    min_lr: float = 1e-5
+    lr_decay_iters: int = 20000
+    min_lr: float = 3e-6
 
     # ----- Output -----
     out_dir: str = "out/cifar100/vitb16"
