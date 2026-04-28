@@ -238,10 +238,11 @@ if rank == 0:
 # ---------------------------------------------------------------------------
 # 4.  Data — ClimbMix via nanochat's tokenizing dataloader
 # ---------------------------------------------------------------------------
-from nanochat.tokenizer import Tokenizer                                  # noqa: E402
+from nanochat.tokenizer import get_tokenizer                              # noqa: E402
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit  # noqa: E402
 
-tokenizer = Tokenizer()
+# Loads RustBPETokenizer trained by ``python -m scripts.tok_train``
+tokenizer = get_tokenizer()
 
 # Each call returns a fresh generator yielding (inputs, targets) as (B, T)
 # long tensors.  Use separate iterators for train and val.
@@ -367,27 +368,34 @@ def _build_optimizer(model_: torch.nn.Module) -> torch.optim.Optimizer:
             {"params": decay_params, "weight_decay": cfg.weight_decay},
             {"params": no_decay_params, "weight_decay": 0.0},
         ]
-        return torch.optim.AdamW(
+        opt = torch.optim.AdamW(
             param_groups,
             lr=cfg.learning_rate,
             betas=(cfg.beta1, cfg.beta2),
             eps=cfg.eps,
         )
+        for pg in opt.param_groups:
+            pg["initial_lr"] = pg["lr"]
+        return opt
     elif opt_name == "muon_adamw":
-        # Delegate to nanochat's MuonAdamW setup.  Note: Adam preconditioned
-        # Hessian (prec_h) only applies to AdamW param groups; Muon groups
-        # fall back to the raw Hessian value.
+        # Delegates to nanochat's model.setup_optimizer() which builds
+        # MuonAdamW (or DistMuonAdamW for DDP) with per-group LRs.
+        # Each group stores group["initial_lr"] so the cosine schedule can
+        # scale all groups proportionally rather than overwriting them.
+        # Note: prec_H (Adam-preconditioned Hessian) only works for the AdamW
+        # param groups; Muon groups fall back to the raw Hessian value.
         _raw = model_.module if use_ddp else model_
         return _raw.setup_optimizer(
-            lr=cfg.learning_rate,
+            matrix_lr=cfg.muon_matrix_lr,
+            embedding_lr=cfg.muon_embedding_lr,
+            unembedding_lr=cfg.muon_unembedding_lr,
+            scalar_lr=cfg.muon_scalar_lr,
             weight_decay=cfg.weight_decay,
-            betas=(cfg.beta1, cfg.beta2),
-            eps=cfg.eps,
         )
     else:
         raise ValueError(
             f"Unknown optimizer '{cfg.optimizer}'. "
-            "Choose 'adamw' (recommended) or 'muon_adamw'."
+            "Choose 'muon_adamw' (nanochat default) or 'adamw'."
         )
 
 
@@ -397,6 +405,7 @@ optimizer = _build_optimizer(model)
 # 7.  LR schedule  (cosine with linear warm-up)
 # ---------------------------------------------------------------------------
 def get_lr(it: int) -> float:
+    """Absolute LR for the AdamW-only optimizer path."""
     if not cfg.decay_lr:
         return cfg.learning_rate
     if it < cfg.warmup_iters:
@@ -406,6 +415,24 @@ def get_lr(it: int) -> float:
     ratio = (it - cfg.warmup_iters) / max(1, cfg.lr_decay_iters - cfg.warmup_iters)
     coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
     return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
+
+
+def get_lr_scale(it: int) -> float:
+    """Fractional LR scale in [min_lr/learning_rate, 1] for MuonAdamW.
+
+    Each param group has its own tuned ``initial_lr``; multiplying by this
+    scale applies the same cosine decay to all groups proportionally.
+    """
+    if not cfg.decay_lr:
+        return 1.0
+    floor = cfg.min_lr / cfg.learning_rate if cfg.learning_rate > 0 else 0.0
+    if it < cfg.warmup_iters:
+        return floor + (1.0 - floor) * (it + 1) / cfg.warmup_iters
+    if it > cfg.lr_decay_iters:
+        return floor
+    ratio = (it - cfg.warmup_iters) / max(1, cfg.lr_decay_iters - cfg.warmup_iters)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
+    return floor + coeff * (1.0 - floor)
 
 
 # ---------------------------------------------------------------------------
@@ -507,9 +534,17 @@ X, Y = next(train_iter)
 for iter_num in range(iter_num, cfg.max_iters):
 
     # ---- LR update ----
-    lr = get_lr(iter_num)
-    for pg in optimizer.param_groups:
-        pg["lr"] = lr
+    if cfg.optimizer.lower() == "muon_adamw":
+        # Scale each group's initial_lr proportionally — avoids clobbering
+        # the per-group LR ratios set by setup_optimizer().
+        lr_scale = get_lr_scale(iter_num)
+        for pg in optimizer.param_groups:
+            pg["lr"] = pg.get("initial_lr", pg["lr"]) * lr_scale
+        lr = lr_scale * cfg.muon_matrix_lr  # representative value for logging
+    else:
+        lr = get_lr(iter_num)
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
 
     # ---- Temperature-shift intervention ----
     if cfg.temp_shift_step >= 0 and iter_num == cfg.temp_shift_step:

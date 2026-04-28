@@ -75,6 +75,20 @@ python -m nanochat.dataset -n 170
 Approximately 150 shards are needed for GPT-2 capability pretraining, add 20 for padding.
 The maximum total number of shards available in the entire dataset is 6542, which requires ~50 GB of disk space and a stable internet connection.
 
+### Step 4 — Train the BPE tokenizer
+
+`base_train.py` loads the tokenizer via `get_tokenizer()`, which reads the
+`RustBPETokenizer` saved by `scripts/tok_train.py`.  Run this once inside
+the nanochat clone **after** downloading the data shards:
+
+```bash
+cd nanochat/nanochat_repo
+python -m scripts.tok_train          # trains on 2B chars, saves tokenizer/
+```
+
+The tokenizer is saved to `nanochat/nanochat_repo/tokenizer/tokenizer.pkl`
+(~5 min on a modern CPU).  This step only needs to be done once.
+
 ---
 
 ## Training

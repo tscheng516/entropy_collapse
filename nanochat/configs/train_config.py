@@ -90,17 +90,32 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Optimiser
     # ------------------------------------------------------------------ #
-    optimizer: str = "adamw"
-    # 'adamw'       — plain AdamW on all params (recommended: prec_H works)
-    # 'muon_adamw'  — nanochat's Muon+AdamW (faster but prec_H only for
-    #                 AdamW param groups; Muon groups fall back to H)
+    optimizer: str = "muon_adamw"
+    # 'muon_adamw'  — nanochat's Muon+AdamW (nanochat default; prec_H
+    #                 applies only to AdamW param groups, Muon groups fall
+    #                 back to raw H)
+    # 'adamw'       — plain AdamW on all params (slower but prec_H works
+    #                 everywhere; useful for ablations)
+
+    # AdamW-only case: single LR applied to all param groups
     learning_rate: float = 3e-4
     max_iters: int = 2000
-    weight_decay: float = 0.1
+    weight_decay: float = 0.0      # nanochat default; set >0 for regularisation
     beta1: float = 0.9
     beta2: float = 0.95
     grad_clip: float = 1.0
     eps: float = 1e-8
+
+    # MuonAdamW hyperparameters — passed directly to model.setup_optimizer().
+    # Each param group gets its own tuned LR; the cosine schedule scales
+    # all groups proportionally via their stored ``initial_lr``.
+    muon_matrix_lr: float = 0.02        # Muon groups: transformer.h matrices
+    muon_embedding_lr: float = 0.2      # AdamW: token embedding + value embeds
+    muon_unembedding_lr: float = 0.004  # AdamW: lm_head
+    muon_scalar_lr: float = 0.5         # AdamW: resid_lambdas, x0_lambdas, smear
+    muon_momentum: float = 0.95         # Muon momentum coefficient
+    muon_ns_steps: int = 5              # Newton-Schulz / Polar Express iterations
+    muon_beta2: float = 0.9             # Muon variance-reduction beta
 
     # ------------------------------------------------------------------ #
     # LR schedule — cosine decay with linear warm-up
