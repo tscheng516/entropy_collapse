@@ -12,26 +12,37 @@
 #   bash train.sh config=imagenet1k_base --lr 5e-4 max_iters=100000
 set -euo pipefail
 
-# ---- GPU selection  -------------------------------------------------------
-GPUS="${GPUS:-2,3,4,5}"
-# --------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# 2. GPU selection
+# -----------------------------------------------------------------------------
+GPUS="${GPUS:-2,3,4,5}"
 IFS=',' read -ra GPU_ARRAY <<< "$GPUS"
 NPROC=${#GPU_ARRAY[@]}
-
 export CUDA_VISIBLE_DEVICES="$GPUS"
 
-# Prevent DataLoader workers from spawning redundant OpenMP/MKL threads.
+
+# -----------------------------------------------------------------------------
+# 2. Environment setup
+# -----------------------------------------------------------------------------
+# Paths 
+ROOT="$(pwd)" 
+KEYS_DIR="$ROOT/../../.keys"
+export WANDB_API_KEY="$(cat "$KEYS_DIR/wandb_api_key")"
+
+eval "$(conda shell.bash hook)"
+conda activate entropy-vit
+
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
-
-# Activate conda
-eval "$(conda shell.bash hook)"
-conda activate entropy-collapse-vit
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-torchrun \
-    --nproc_per_node="$NPROC" \
-    "$SCRIPT_DIR/base_train.py" \
-    "$@"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# -----------------------------------------------------------------------------
+# 3. Script
+# -----------------------------------------------------------------------------
+torchrun --nproc_per_node="$NPROC" base_train.py \
+        # config=cifar100_base \
+        # max_iters=1000 \
+        # --lr 1e-4 \
+        # --bs 32 \
+        # temp_shift_step=15000 \
+        # temp_shift_factor=0.5 
