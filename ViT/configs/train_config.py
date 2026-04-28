@@ -44,7 +44,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # I/O
     # ------------------------------------------------------------------ #
-    out_dir: str = "out"
+    out_dir: str = "out/pilot"
     eval_interval: int = 500
     log_interval: int = 1
     checkpoint_interval: int = -1
