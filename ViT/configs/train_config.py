@@ -55,7 +55,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Weights & Biases
     # ------------------------------------------------------------------ #
-    wandb_log: bool = True
+    wandb_log: bool = False
     wandb_project: str = "entropy-collapse-vit"
     wandb_run_name: str = "run"
 
@@ -218,6 +218,7 @@ class ViTBaseCIFAR100Config(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/cifar100/vitb16"
+    wandb_log: bool = True
     wandb_project: str = "entropy-collapse-cifar100"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
@@ -273,6 +274,7 @@ class ViTBaseImageNet1kConfig(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vitb16"
+    wandb_log: bool = True
     wandb_project: str = "entropy-collapse-imagenet1k"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
@@ -323,6 +325,7 @@ class ViTLargeCIFAR100Config(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/cifar100/vitl16"
+    wandb_log: bool = True
     wandb_project: str = "entropy-collapse-cifar100"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
@@ -374,6 +377,7 @@ class ViTLargeImageNet1kConfig(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vitl16"
+    wandb_log: bool = True
     wandb_project: str = "entropy-collapse-imagenet1k"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
@@ -424,6 +428,7 @@ class ViTHugeCIFAR100Config(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/cifar100/vith14"
+    wandb_log: bool = True
     wandb_project: str = "entropy-collapse-cifar100"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
@@ -475,6 +480,7 @@ class ViTHugeImageNet1kConfig(TrainConfig):
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vith14"
+    wandb_log: bool = True
     wandb_project: str = "entropy-collapse-imagenet1k"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
