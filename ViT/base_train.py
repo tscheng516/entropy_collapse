@@ -659,7 +659,6 @@ for iter_num in range(iter_num, cfg.max_iters):
                 max_iter=cfg.hessian_max_iter,
                 compute_fd=cfg.compute_fd,
                 hessian_batch_size=cfg.hessian_batch_size,
-                use_grad_ckpt=cfg.use_grad_ckpt,
                 label_smoothing=cfg.label_smoothing,
             )
         except Exception as exc:

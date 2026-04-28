@@ -24,7 +24,6 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint as _ckpt_utils
 from torch.func import functional_call
 from torch.autograd import functional as autograd_functional
 
@@ -145,8 +144,8 @@ def get_curvature_metrics(
     max_iter: int = 10,
     compute_fd: bool = False,
     hessian_batch_size: int = 128,
-    use_grad_ckpt: bool = True,
-    label_smoothing: float = 0.1,
+    use_grad_ckpt: bool = False,  # kept for API compatibility; has no effect
+    label_smoothing: float = 0.0,
 ) -> dict[str, float]:
     """
     Compute sharpness proxies for the current model state.
@@ -173,10 +172,19 @@ def get_curvature_metrics(
       2. ``hessian``, ``hessian_vv``, ``prec_h``, and ``diag_h`` share a
          **single** ``create_graph=True`` forward pass and first-order gradient
          graph.  The graph is released once, after all four proxies finish.
-      3. ``use_grad_ckpt`` activates timm's built-in gradient checkpointing on
-         the transformer blocks for the shared HVP forward pass, reducing peak
-         activation memory from O(depth) to O(sqrt(depth)) layers.
-      4. K-FAC is gated behind ``compute_fd`` (disabled by default).
+      3. K-FAC is gated behind ``compute_fd`` (disabled by default).
+
+    Note on gradient checkpointing: timm's ``set_grad_checkpointing`` is
+    incompatible with ``autograd.grad(..., create_graph=True)`` because
+    timm imports ``torch.utils.checkpoint.checkpoint`` into its own module
+    namespace at load time (``from torch.utils.checkpoint import checkpoint``),
+    and that local binding uses ``use_reentrant=True`` by default, which
+    forbids higher-order autograd.  The ``use_grad_ckpt`` parameter is
+    therefore retained only for API compatibility and has no effect.
+    The ``hessian_batch_size`` slice is the primary memory-reduction lever:
+    128 samples reduce peak activation memory ~8× vs. a typical bs=1024
+    training batch, making the HVP forward pass feasible on ViT-L/H without
+    any block-level checkpointing.
 
     Args:
         model:              Model, unwrapped from DDP.
@@ -192,10 +200,8 @@ def get_curvature_metrics(
                             estimation.  Reduces peak GPU memory in proportion
                             to batch reduction; 128 is sufficient for λ_max
                             trend monitoring.
-        use_grad_ckpt:      If True and the model exposes
-                            ``set_grad_checkpointing()``, enable gradient
-                            checkpointing on the transformer blocks for the
-                            shared HVP forward pass.
+        use_grad_ckpt:      Unused — kept for API compatibility only. See note
+                            in docstring.
         label_smoothing:    Applied to the diagnostic CE loss (should match
                             cfg.label_smoothing for consistent curvature scale).
 
@@ -220,14 +226,8 @@ def get_curvature_metrics(
     # ------------------------------------------------------------------ #
     # Shared forward pass for HVP-based proxies (H, H_VV, prec_H, diag_H).
     #
-    # Fused / flash attention kernels are disabled so that second-order
-    # autograd can traverse the explicit softmax graph correctly (the
-    # patched attention already uses the explicit path, but the sdp_kernel
-    # context guards against any timm version that might re-enable it).
-    #
-    # Gradient checkpointing (via timm's set_grad_checkpointing) reduces
-    # peak activation memory by recomputing layer outputs during HVP
-    # backward passes instead of storing them all simultaneously.
+    # Flash / fused attention is disabled so that second-order autograd can
+    # traverse the explicit softmax graph in _patched_attn_forward.
     # ------------------------------------------------------------------ #
     _sdp_ctx = (
         torch.backends.cuda.sdp_kernel(
@@ -236,26 +236,8 @@ def get_curvature_metrics(
         if Xc.is_cuda
         else nullcontext()
     )
-    # timm's set_grad_checkpointing internally calls torch.utils.checkpoint.checkpoint
-    # with use_reentrant=True (the default), which is incompatible with
-    # autograd.grad(..., create_graph=True) used in the HVP computation below.
-    # We temporarily patch torch.utils.checkpoint.checkpoint to force
-    # use_reentrant=False before enabling grad-checkpointing on the model.
-    _ckpt_enabled = use_grad_ckpt and hasattr(model, "set_grad_checkpointing")
-    _orig_ckpt_fn = _ckpt_utils.checkpoint
-    if _ckpt_enabled:
-        def _nr_ckpt(fn, *args, **kw):
-            kw.setdefault("use_reentrant", False)
-            return _orig_ckpt_fn(fn, *args, **kw)
-        _ckpt_utils.checkpoint = _nr_ckpt
-        model.set_grad_checkpointing(True)
-    try:
-        with _sdp_ctx:
-            logits_h = model(Xc)
-    finally:
-        if _ckpt_enabled:
-            model.set_grad_checkpointing(False)
-            _ckpt_utils.checkpoint = _orig_ckpt_fn
+    with _sdp_ctx:
+        logits_h = model(Xc)
     loss = F.cross_entropy(logits_h, Yc, label_smoothing=label_smoothing)
     del logits_h  # free; the scalar loss node retains the graph
 

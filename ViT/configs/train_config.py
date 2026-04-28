@@ -152,7 +152,6 @@ class TrainConfig:
     device: str = "cuda"                # 'cuda' | 'cpu' | 'mps'
     compile: bool = False               # disable when computing 2nd-order grads
     dtype: str = "bfloat16"             # 'float32' | 'bfloat16' | 'float16' | 'float8'
-    use_grad_ckpt: bool = False         # gradient checkpointing for HVP forward pass
     seed: int = 1337
 
     def __post_init__(self) -> None:
@@ -320,9 +319,6 @@ class ViTLargeCIFAR100Config(TrainConfig):
     lr_decay_iters: int = 50000
     min_lr: float = 1e-6
 
-    # ----- Compute -----
-    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
-
     # ----- Output -----
     out_dir: str = "out/cifar100/vitl14"
     wandb_log: bool = True
@@ -372,9 +368,6 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     lr_decay_iters: int = 50000
     min_lr: float = 1e-6
 
-    # ----- Compute -----
-    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
-
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vitl14"
     wandb_log: bool = True
@@ -422,9 +415,6 @@ class ViTHugeCIFAR100Config(TrainConfig):
     warmup_iters: int = 2000
     lr_decay_iters: int = 50000
     min_lr: float = 1e-6
-
-    # ----- Compute -----
-    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
 
     # ----- Output -----
     out_dir: str = "out/cifar100/vith14"
@@ -474,9 +464,6 @@ class ViTHugeImageNet1kConfig(TrainConfig):
     warmup_iters: int = 5000
     lr_decay_iters: int = 50000
     min_lr: float = 1e-6
-
-    # ----- Compute -----
-    use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
 
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vith14"
