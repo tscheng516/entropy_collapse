@@ -309,7 +309,7 @@ class ViTLargeCIFAR100Config(TrainConfig):
     label_smoothing: float = 0.1
 
     # ----- Optimiser -----
-    learning_rate: float = 3e-4   # lower LR for larger model
+    learning_rate: float = 1e-4   # lower LR for larger model
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -318,7 +318,7 @@ class ViTLargeCIFAR100Config(TrainConfig):
     max_iters: int = 50000
     warmup_iters: int = 2000
     lr_decay_iters: int = 50000
-    min_lr: float = 3e-6
+    min_lr: float = 1e-6
 
     # ----- Compute -----
     use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
@@ -361,7 +361,7 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     label_smoothing: float = 0.1
 
     # ----- Optimiser -----
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-4
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -370,7 +370,7 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     max_iters: int = 50000
     warmup_iters: int = 5000
     lr_decay_iters: int = 50000
-    min_lr: float = 3e-6
+    min_lr: float = 1e-6
 
     # ----- Compute -----
     use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
