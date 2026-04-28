@@ -55,7 +55,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Weights & Biases
     # ------------------------------------------------------------------ #
-    wandb_log: bool = False
+    wandb_log: bool = False # diabled in pilot test with default config
     wandb_project: str = "entropy-collapse-vit"
     wandb_run_name: str = "run"
 
@@ -70,7 +70,7 @@ class TrainConfig:
     # ImageNet: directory with train/ and val/ in ImageFolder layout.
     # ImageNet HF: Hugging Face cache directory.
 
-    batch_size: int = 32
+    batch_size: int = 32 # small batch size for pilot test; increase to 256 for main experiments
     num_workers: int = 8
 
     # ------------------------------------------------------------------ #
@@ -105,7 +105,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     optimizer: str = "adamw"            # 'adamw' | 'sgd'
     learning_rate: float = 3e-4
-    max_iters: int = 1000
+    max_iters: int = 2000
     weight_decay: float = 0.05
     beta1: float = 0.9
     beta2: float = 0.999
@@ -118,13 +118,13 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     decay_lr: bool = True
     warmup_iters: int = 2000
-    lr_decay_iters: int = 50000
-    min_lr: float = 1e-5
+    lr_decay_iters: int = 20000
+    min_lr: float = 3e-6
 
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_freq: int = 100
+    hessian_freq: int = 500
     # Compute all nine curvature proxies every N iterations.
     hessian_max_iter: int = 10
     # Power-iteration steps for λ_max estimation.
@@ -137,14 +137,14 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_freq: int = 100
+    entropy_freq: int = 500
     # Compute per-layer attention entropy every N iterations.
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention
     # ------------------------------------------------------------------ #
     temp_shift_step: int = -1
-    temp_shift_factor: float = 2.0
+    temp_shift_factor: float = 0.25
 
     # ------------------------------------------------------------------ #
     # Compute / device
