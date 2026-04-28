@@ -1,0 +1,17 @@
+# nanochat entropy-collapse experiments
+# Pinned to nanochat SHA 0aaca56 (see README.md).
+#
+# nanochat's own dependencies are managed by uv (see README §1).
+# This file lists the *additional* packages needed by our research harness
+# that are NOT already pulled in by nanochat's pyproject.toml.
+#
+# Install after activating the nanochat uv environment:
+#   uv pip install -r nanochat/requirements.txt
+
+# Science / plotting (same pins as ViT/ experiments for cross-arch consistency)
+numpy==1.26.4
+scipy==1.11.4
+matplotlib==3.8.2
+
+# Logging
+wandb==0.19.11
