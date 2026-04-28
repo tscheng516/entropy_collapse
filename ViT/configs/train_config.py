@@ -324,7 +324,7 @@ class ViTLargeCIFAR100Config(TrainConfig):
     use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
 
     # ----- Output -----
-    out_dir: str = "out/cifar100/vitl16"
+    out_dir: str = "out/cifar100/vitl14"
     wandb_log: bool = True
     wandb_project: str = "entropy-collapse-cifar100"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
@@ -376,7 +376,7 @@ class ViTLargeImageNet1kConfig(TrainConfig):
     use_grad_ckpt: bool = True          # checkpoint blocks to cut HVP activation memory
 
     # ----- Output -----
-    out_dir: str = "out/imagenet1k/vitl16"
+    out_dir: str = "out/imagenet1k/vitl14"
     wandb_log: bool = True
     wandb_project: str = "entropy-collapse-imagenet1k"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
