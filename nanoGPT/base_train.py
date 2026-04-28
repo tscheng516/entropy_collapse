@@ -91,17 +91,31 @@ if NANOGPT_DIR not in sys.path:
 # ---------------------------------------------------------------------------
 # 1.  Default configuration (loaded from dataclass, then CLI overrides)
 # ---------------------------------------------------------------------------
-from configs.train_config import TrainConfig  # noqa: E402
+from configs.train_config import TrainConfig, CONFIGS  # noqa: E402
 
-cfg = TrainConfig()
+import ast
+
+# --- Step 1: scan argv for config=<preset> FIRST to pick the base class ---
+_cfg_class = TrainConfig
+for _arg in sys.argv[1:]:
+    if _arg.startswith("config="):
+        _preset = _arg.split("=", 1)[1]
+        if _preset in CONFIGS:
+            _cfg_class = CONFIGS[_preset]
+        else:
+            print(f"[warn] unknown config preset '{_preset}', using TrainConfig.")
+        break
+
+cfg = _cfg_class()
 
 # NanoGPT-style CLI overrides: python base_train.py learning_rate=1e-4 ...
 # Short argparse flags are also supported, e.g. ``--lr 1e-4 --optim adamw``.
-import ast
-
+# Skip the special 'config' key since it selects the preset class, not a field.
 for arg in sys.argv[1:]:
     if "=" in arg:
         key, val = arg.split("=", 1)
+        if key == "config":
+            continue  # handled above
         if hasattr(cfg, key):
             try:
                 # ast.literal_eval handles ints, floats, bools, strings safely
@@ -121,6 +135,7 @@ parser.add_argument("--optim", type=str, help="optimizer name (adamw or sgd)")
 parser.add_argument("--lr", type=float, help="peak learning rate")
 parser.add_argument("--max_it", type=int, help="number of training iterations")
 parser.add_argument("--wandb", type=str, help="enable wandb logging (true/false)")
+parser.add_argument("--dataset", type=str, help="dataset name shortcut (e.g. fineweb_edu, climbmix)")
 parser.add_argument(
     "--temp_shift",
     type=int,
@@ -149,6 +164,8 @@ if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
 _maybe_set("temp_shift_step", known_args.temp_shift)
+if known_args.dataset is not None:
+    _maybe_set("dataset", known_args.dataset)
 
 # ---------------------------------------------------------------------------
 # 2.  Reproducibility & device
@@ -221,7 +238,11 @@ if rank == 0:
 # ---------------------------------------------------------------------------
 # 3.  Data
 # ---------------------------------------------------------------------------
-from src.data_utils import load_data, get_batch  # noqa: E402
+from src.data_utils import load_data, get_batch, ensure_data  # noqa: E402
+
+# Auto-download / prepare dataset if needed (no-op for shakespeare_char if
+# files already exist; downloads from HuggingFace for fineweb_edu / climbmix).
+ensure_data(cfg.dataset, cfg.data_dir, cfg.num_proc)
 
 train_data, val_data = load_data(cfg.data_dir)
 print(
@@ -511,21 +532,17 @@ for iter_num in range(iter_num, cfg.max_iters):
     if iter_num % cfg.hessian_freq == 0:
         model.train()
         optimizer.zero_grad()
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
-        ) if device != "cpu" else nullcontext():
-            _, loss_for_hess = model(X, Y)
-
         try:
             curvature = get_curvature_metrics(
                 model,
                 optimizer,
                 X,
                 Y,
-                loss_for_hess,
                 vv_mask,
                 max_iter=cfg.hessian_max_iter,
                 compute_fd=cfg.compute_fd,
+                hessian_batch_size=cfg.hessian_batch_size,
+                label_smoothing=cfg.label_smoothing,
             )
         except Exception as exc:
             print(f"[warn] curvature metrics failed at iter {iter_num}: {exc}")
@@ -633,39 +650,13 @@ if not use_ddp or rank == 0:
 # ---------------------------------------------------------------------------
 
 if not use_ddp or rank == 0:
-    from src.plotting import plot_training_dynamics, plot_spike_cooccurrence  # noqa: E402
+    from plot_history import plot_history  # noqa: E402
 
-    fig = plot_training_dynamics(
-        histories={"Run": history},
-        lrs={"Run": cfg.learning_rate},
-        save_path=os.path.join(run_out_dir, "training_dynamics.png"),
+    plot_history(
+        pkl_path=history_path,
+        out_dir=run_out_dir,
+        hessian_freq=cfg.hessian_freq,
+        entropy_freq=cfg.entropy_freq,
+        skip_intv=cfg.skip_intv,
+        compute_fd=cfg.compute_fd,
     )
-    print(f"[plot] training dynamics → {os.path.join(run_out_dir, 'training_dynamics.png')}")
-
-    spike_targets = [
-        ("hessian_vv", "H_VV", "hessian_vv"),
-        ("prec_h", "Prec_H", "hessian_prec"),
-        ("gn", "GN", "hessian_gn"),
-        ("diag_h", "Diag_H", "hessian_diag"),
-        ("fisher", "Fisher", "hessian_fisher"),
-        ("bfgs", "BFGS", "hessian_bfgs"),
-        ("kfac", "KFAC", "hessian_kfac"),
-    ]
-    for z in (1.5, 2):
-        for key, label, suffix in spike_targets:
-            _, res = plot_spike_cooccurrence(
-                history["hessian"],
-                history[key],
-                x_name="Exact H",
-                y_name=label,
-                window=15,
-                z_score=z,
-                save_path=os.path.join(
-                    run_out_dir,
-                    f"spike_cooccurrence_H_vs_{suffix}_z{z}.png",
-                ),
-            )
-            print(
-                f"[plot] z={z} spike co-occurrence: "
-                f"P({label} spike | H spike) = {res['P(Y_spike | X_spike)']:.3f}"
-            )

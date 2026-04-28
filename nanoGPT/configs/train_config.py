@@ -210,3 +210,62 @@ class TrainConfig:
 
     seed: int = 1337
     """Random seed for reproducibility."""
+
+    hessian_batch_size: int = 128
+    """Batch size used for Hessian metric computation (independent of train batch_size)."""
+
+
+    num_proc: int = 4
+    """Number of worker processes for dataset preparation (HuggingFace datasets)."""
+
+
+
+# ======================================================================
+# Dataset preset subclasses
+# ======================================================================
+
+@dataclass
+class ShakespeareConfig(TrainConfig):
+    """Preset for character-level Shakespeare (default LLM settings)."""
+    pass
+
+
+@dataclass
+class FinewebEduConfig(TrainConfig):
+    """Preset for HuggingFace FineWeb-Edu (10BT sample), GPT-2 tokeniser."""
+    dataset: str = "fineweb_edu"
+    data_dir: str = "data/fineweb_edu"
+    vocab_size: int = 50257
+    block_size: int = 1024
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    batch_size: int = 12
+    learning_rate: float = 6e-4
+    min_lr: float = 6e-5
+    warmup_iters: int = 2000
+    lr_decay_iters: int = 600000
+    max_iters: int = 600000
+
+
+@dataclass
+class ClimbMixConfig(FinewebEduConfig):
+    """Preset for NVIDIA ClimbMix dataset, GPT-2 tokeniser."""
+    dataset: str = "climbmix"
+    data_dir: str = "data/climbmix"
+
+
+# ======================================================================
+# Registry
+# ======================================================================
+
+CONFIGS: dict = {
+    "shakespeare": ShakespeareConfig,
+    "shakespeare_char": ShakespeareConfig,
+    "fineweb_edu": FinewebEduConfig,
+    "fineweb-edu": FinewebEduConfig,
+    "fineweb": FinewebEduConfig,
+    "climbmix": ClimbMixConfig,
+    "nemotron_climbmix": ClimbMixConfig,
+}
+
