@@ -615,7 +615,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         if _is_master:
             print(
                 f"[eval] iter {iter_num:5d} | val_loss {val_loss:.4f} "
-                f"| val_acc {val_acc:.2f}%  | best {best_val_loss:.4f}"
+                f"| val_acc {val_acc:.2f}%  "
             )
         if cfg.wandb_log and (not use_ddp or rank == 0):
             wandb.log(
