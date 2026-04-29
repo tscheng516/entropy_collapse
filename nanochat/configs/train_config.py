@@ -7,13 +7,16 @@ named preset dataclasses.  ``TrainConfig`` is a minimal d12 research run
 (~85 M parameters, ~5 min on 8×H100).  Larger presets mirror the nanochat
 speedrun configurations.
 
-Named presets
+Named presets  (n_embd = depth×64, n_head = n_embd/128 — nanochat formula)
 -------------
 | Key   | n_layer | n_embd | n_head | n_kv_head | ~params | Use case              |
 |-------|---------|--------|--------|-----------|---------|----------------------|
-| d8    |  8      |  512   |  4     |  4        |  ~30 M  | Quick iteration       |
-| d12   | 12      |  768   |  6     |  6        |  ~85 M  | Default research run  |
-| d24   | 24      | 1024   |  8     |  4        | ~350 M  | GPT-2 scale speedrun  |
+| d8    |  8      |  512   |  4     |  4        |  ~42 M  | Quick iteration       |
+| d12   | 12      |  768   |  6     |  6        | ~110 M  | Default research run  |
+| d24   | 24      | 1536   | 12     | 12        | ~730 M  | GPT-2 scale speedrun  |
+
+max_iters calibrated for param:data ratio ≈ 10 on 4 GPUs (train.sh default),
+batch_size=8 per GPU.  Scale proportionally for other GPU counts.
 
 Select a preset on the CLI::
 
@@ -91,39 +94,44 @@ class TrainConfig:
     # Optimiser
     # ------------------------------------------------------------------ #
     optimizer: str = "muon_adamw"
-    # 'muon_adamw'  — nanochat's Muon+AdamW (nanochat default; prec_H
-    #                 applies only to AdamW param groups, Muon groups fall
-    #                 back to raw H)
-    # 'adamw'       — plain AdamW on all params (slower but prec_H works
-    #                 everywhere; useful for ablations)
+    # 'muon_adamw'  — nanochat's Muon+AdamW (nanochat default; fastest).
+    #                 prec_H applies only to AdamW param groups; Muon
+    #                 groups fall back to raw H.
+    #                 dtype compat: fp32 only — nanochat's compiled
+    #                 adamw_step_fused lerp_ crashes with bf16 embeddings.
+    # 'adamw'       — plain AdamW on all params.  Slower but prec_H works
+    #                 everywhere.  Compatible with both fp32 AND bf16:
+    #                 PyTorch's native AdamW handles mixed-dtype grads
+    #                 (wte + value_embeds stay bf16, rest fp32).
 
-    # AdamW-only case: single LR applied to all param groups
-    learning_rate: float = 3e-4
+    # AdamW shared fields (used by both optimizer paths)
+    learning_rate: float = 3e-4     # AdamW: single LR for all param groups
     max_iters: int = 2000
-    weight_decay: float = 0.0      # nanochat default; set >0 for regularisation
+    weight_decay: float = 0.28      # nanochat default; cosine-decayed to 0
+                                    # over training for muon_adamw
     beta1: float = 0.9
     beta2: float = 0.95
     grad_clip: float = 1.0
     eps: float = 1e-8
 
     # MuonAdamW hyperparameters — passed directly to model.setup_optimizer().
-    # Each param group gets its own tuned LR; the cosine schedule scales
-    # all groups proportionally via their stored ``initial_lr``.
-    muon_matrix_lr: float = 0.02        # Muon groups: transformer.h matrices
-    muon_embedding_lr: float = 0.2      # AdamW: token embedding + value embeds
-    muon_unembedding_lr: float = 0.004  # AdamW: lm_head
-    muon_scalar_lr: float = 0.5         # AdamW: resid_lambdas, x0_lambdas, smear
-    muon_momentum: float = 0.95         # Muon momentum coefficient
-    muon_ns_steps: int = 5              # Newton-Schulz / Polar Express iterations
-    muon_beta2: float = 0.9             # Muon variance-reduction beta
+    # Per-group LRs from nanochat scripts/base_train.py defaults.
+    # The trapezoidal schedule scales all groups via their ``initial_lr``.
+    muon_matrix_lr: float = 0.02        # Muon: transformer.h matrices
+    muon_embedding_lr: float = 0.3      # AdamW: wte + value_embeds
+    muon_unembedding_lr: float = 0.008  # AdamW: lm_head
+    muon_scalar_lr: float = 0.5         # AdamW: resid/x0/smear scalars
+    muon_ns_steps: int = 5              # Newton-Schulz / Polar Express iters
+    # Muon momentum is scheduled dynamically in base_train.py (0.85→0.97→0.90);
+    # it is not stored here.  WD is also cosine-scheduled from weight_decay→0.
 
     # ------------------------------------------------------------------ #
-    # LR schedule — cosine decay with linear warm-up
+    # LR schedule — trapezoidal (nanochat default)
+    # linear warm-up → constant plateau → linear warm-down
     # ------------------------------------------------------------------ #
-    decay_lr: bool = True
-    warmup_iters: int = 200
-    lr_decay_iters: int = 2000
-    min_lr: float = 3e-5
+    warmup_iters: int = 500
+    warmdown_ratio: float = 0.65    # fraction of max_iters spent in warmdown
+    min_lr_frac: float = 0.05       # final LR as fraction of initial LR
 
     # ------------------------------------------------------------------ #
     # Hessian metrics
@@ -193,13 +201,13 @@ class D8Config(TrainConfig):
     wandb_project: str = "entropy-collapse-nanochat-d8"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
-    max_iters: int = 2000
-    warmup_iters: int = 200
-    lr_decay_iters: int = 2000
+    # max_iters calibrated for ratio=10 at 4 GPUs, B=8, T=512.
+    # Scale: ×2 for 2 GPUs, ×8 for 1 GPU.
+    max_iters: int = 25_000
+    warmup_iters: int = 250           # ~1% of max_iters
     learning_rate: float = 5e-4
-    min_lr: float = 5e-5
 
-    hessian_intv: int = 200
+    hessian_intv: int = 250
     entropy_intv: int = 50
 
 
@@ -223,11 +231,11 @@ class D12Config(TrainConfig):
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
     batch_size: int = 8
-    max_iters: int = 10000
-    warmup_iters: int = 500
-    lr_decay_iters: int = 10000
+    # max_iters calibrated for ratio=10 at 4 GPUs, B=8, T=512.
+    # Scale: ×2 for 2 GPUs, ×8 for 1 GPU.
+    max_iters: int = 65_000
+    warmup_iters: int = 650           # ~1% of max_iters
     learning_rate: float = 3e-4
-    min_lr: float = 3e-5
 
     hessian_intv: int = 500
     entropy_intv: int = 100
@@ -244,10 +252,11 @@ class D24Config(TrainConfig):
     Note: Reduce hessian_batch_size to 1 on GPUs with < 80 GB if you OOM
     during curvature computation.
     """
+    # nanochat formula: n_embd=24×64=1536, n_head=1536/128=12, n_kv_head=12
     n_layer: int = 24
-    n_head: int = 8
-    n_kv_head: int = 4            # GQA: 2× more query heads than KV heads
-    n_embd: int = 1024
+    n_head: int = 12
+    n_kv_head: int = 12
+    n_embd: int = 1536
     sequence_len: int = 2048
 
     out_dir: str = "out/nanochat/d24"
@@ -256,11 +265,11 @@ class D24Config(TrainConfig):
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
     batch_size: int = 8
-    max_iters: int = 50000
-    warmup_iters: int = 2000
-    lr_decay_iters: int = 50000
+    # max_iters calibrated for ratio=10 at 4 GPUs, B=8, T=2048.
+    # Scale: ×2 for 2 GPUs, ×8 for 1 GPU.
+    max_iters: int = 110_000
+    warmup_iters: int = 1000          # ~1% of max_iters
     learning_rate: float = 2e-4
-    min_lr: float = 2e-5
 
     hessian_intv: int = 1000
     hessian_batch_size: int = 1   # large model + long seq → keep at 1

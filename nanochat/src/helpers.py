@@ -153,8 +153,15 @@ def get_curvature_metrics(
             **kwargs,
         )
 
-    params_keys = [k for k, _ in model.named_parameters()]
-    params_vals = [p for _, p in model.named_parameters()]
+    # Build a single authoritative parameter list from named_parameters().
+    # Using model.parameters() separately for torch.autograd.grad can give a
+    # DIFFERENT parameter set (nanochat's value_embeds nn.ModuleDict entries
+    # are excluded by parameters()'s memo-dedup in some PyTorch builds),
+    # causing a size mismatch between flat_grads and vv_mask.  Using
+    # params_vals everywhere guarantees consistency.
+    params_list = [(k, p) for k, p in model.named_parameters() if p.requires_grad]
+    params_keys = [k for k, p in params_list]
+    params_vals = [p for k, p in params_list]
     flat_params = torch.cat([p.reshape(-1) for p in params_vals])
 
     # ------------------------------------------------------------------ #
@@ -176,7 +183,7 @@ def get_curvature_metrics(
     del logits_h
 
     grads = torch.autograd.grad(
-        loss, model.parameters(), create_graph=True, retain_graph=True
+        loss, params_vals, create_graph=True, retain_graph=True
     )
     flat_grads = torch.cat([g.reshape(-1) for g in grads])
 
@@ -188,7 +195,7 @@ def get_curvature_metrics(
     flat_hvp: torch.Tensor | None = None
     for _ in range(max_iter):
         hvp = torch.autograd.grad(
-            flat_grads, model.parameters(), grad_outputs=v_h, retain_graph=True
+            flat_grads, params_vals, grad_outputs=v_h, retain_graph=True
         )
         flat_hvp = torch.cat([g.contiguous().reshape(-1) for g in hvp])
         v_h = flat_hvp / (flat_hvp.norm() + 1e-9)
@@ -197,13 +204,20 @@ def get_curvature_metrics(
     # ------------------------------------------------------------------ #
     # 2. Value-subspace λ_max(H_VV)
     # ------------------------------------------------------------------ #
-    vv_mask_dev = vv_mask.to(flat_grads.device)
+    # Rebuild vv_mask from params_keys so it matches flat_grads exactly.
+    # The external vv_mask argument is ignored to avoid stale-size issues.
+    vv_mask_dev = torch.cat([
+        torch.ones(p.numel(), device=flat_grads.device)
+        if k.endswith(".attn.c_v.weight")
+        else torch.zeros(p.numel(), device=flat_grads.device)
+        for k, p in zip(params_keys, params_vals)
+    ])
     v_vv = torch.randn_like(flat_grads) * vv_mask_dev
     v_vv = v_vv / (v_vv.norm() + 1e-9)
     flat_hvp_vv: torch.Tensor | None = None
     for _ in range(max_iter):
         hvp_vv = torch.autograd.grad(
-            flat_grads, model.parameters(), grad_outputs=v_vv, retain_graph=True
+            flat_grads, params_vals, grad_outputs=v_vv, retain_graph=True
         )
         flat_hvp_vv = torch.cat([g.contiguous().reshape(-1) for g in hvp_vv])
         v_vv = flat_hvp_vv * vv_mask_dev
@@ -217,7 +231,7 @@ def get_curvature_metrics(
     # ------------------------------------------------------------------ #
     D_inv_sqrt_parts = []
     is_adam = False
-    for param in model.parameters():
+    for param in params_vals:
         state = optimizer.state.get(param, {})
         if "exp_avg_sq" in state and state["exp_avg_sq"].numel() > 0:
             is_adam = True
@@ -242,7 +256,7 @@ def get_curvature_metrics(
         for _ in range(max_iter):
             step1 = D_inv_sqrt * v_prec
             hvp_prec = torch.autograd.grad(
-                flat_grads, model.parameters(), grad_outputs=step1, retain_graph=True
+                flat_grads, params_vals, grad_outputs=step1, retain_graph=True
             )
             flat_hvp_prec = torch.cat([g.contiguous().reshape(-1) for g in hvp_prec])
             step3 = D_inv_sqrt * flat_hvp_prec
@@ -266,7 +280,7 @@ def get_curvature_metrics(
                 * 2.0 - 1.0
             )
             hz = torch.autograd.grad(
-                flat_grads, model.parameters(), grad_outputs=z, retain_graph=True
+                flat_grads, params_vals, grad_outputs=z, retain_graph=True
             )
             flat_hz = torch.cat([g.contiguous().reshape(-1) for g in hz])
             diag_acc += z * flat_hz
@@ -394,13 +408,10 @@ def get_curvature_metrics(
                     p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
                     offset += numel
                 optimizer.zero_grad()
-                g_plus = torch.cat(
-                    [p.grad.reshape(-1).clone() for p in model.parameters()]
-                )
                 _loss = _ce(model(Xc), Yc)
                 _loss.backward()
                 g_plus = torch.cat(
-                    [p.grad.reshape(-1).clone() for p in model.parameters()]
+                    [p.grad.reshape(-1).clone() for p in params_vals]
                 )
 
                 offset = 0
@@ -412,7 +423,7 @@ def get_curvature_metrics(
                 _loss = _ce(model(Xc), Yc)
                 _loss.backward()
                 g_minus = torch.cat(
-                    [p.grad.reshape(-1).clone() for p in model.parameters()]
+                    [p.grad.reshape(-1).clone() for p in params_vals]
                 )
 
                 offset = 0
@@ -505,7 +516,7 @@ def get_curvature_metrics(
             _fd_loss0 = _ce(model(Xc), Yc)
             _fd_loss0.backward()
             g_base = torch.cat(
-                [p.grad.reshape(-1).clone() for p in model.parameters()]
+                [p.grad.reshape(-1).clone() for p in params_vals]
             )
 
             v_fd = torch.randn_like(flat_params)
@@ -522,7 +533,7 @@ def get_curvature_metrics(
                 _fd_loss1 = _ce(model(Xc), Yc)
                 _fd_loss1.backward()
                 g_perturbed = torch.cat(
-                    [p.grad.reshape(-1).clone() for p in model.parameters()]
+                    [p.grad.reshape(-1).clone() for p in params_vals]
                 )
                 offset = 0
                 for p in params_vals:

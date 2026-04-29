@@ -213,10 +213,12 @@ if _is_master:
 if _nc_dtype == torch.bfloat16 and cfg.optimizer.lower() == "muon_adamw":
     if _is_master:
         print(
-            "[warn] compute_dtype=bf16 + optimizer=muon_adamw will likely "
-            "crash: nanochat's compiled adamw_step_fused does not cast its "
-            "float32 hyperparameter scalars to match bf16 embedding params. "
-            "Switch to optimizer=adamw for safe bf16 pre-training."
+            "[warn] compute_dtype=bf16 + optimizer=muon_adamw will crash: "
+            "nanochat's compiled adamw_step_fused does not cast its float32 "
+            "hyperparameter scalars to bf16 embedding gradients "
+            "(lerp_ dtype mismatch inside @torch.compile).  "
+            "Use compute_dtype=fp32 for muon_adamw, or switch to "
+            "optimizer=adamw which is safe with both fp32 and bf16."
         )
 
 # ---------------------------------------------------------------------------
@@ -439,37 +441,49 @@ def _build_optimizer(model_: torch.nn.Module) -> torch.optim.Optimizer:
 optimizer = _build_optimizer(model)
 
 # ---------------------------------------------------------------------------
-# 7.  LR schedule  (cosine with linear warm-up)
+# 7.  LR / momentum / weight-decay schedules  (nanochat trapezoidal)
 # ---------------------------------------------------------------------------
-def get_lr(it: int) -> float:
-    """Absolute LR for the AdamW-only optimizer path."""
-    if not cfg.decay_lr:
-        return cfg.learning_rate
-    if it < cfg.warmup_iters:
-        return cfg.learning_rate * (it + 1) / cfg.warmup_iters
-    if it > cfg.lr_decay_iters:
-        return cfg.min_lr
-    ratio = (it - cfg.warmup_iters) / max(1, cfg.lr_decay_iters - cfg.warmup_iters)
-    coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
-    return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
+def get_lr_multiplier(it: int) -> float:
+    """Trapezoidal LR multiplier in [min_lr_frac, 1.0].
 
-
-def get_lr_scale(it: int) -> float:
-    """Fractional LR scale in [min_lr/learning_rate, 1] for MuonAdamW.
-
-    Each param group has its own tuned ``initial_lr``; multiplying by this
-    scale applies the same cosine decay to all groups proportionally.
+    nanochat default: linear warmup → constant plateau → linear warmdown.
+    Multiply each param group's ``initial_lr`` by this value to get the
+    actual LR for that step.
     """
-    if not cfg.decay_lr:
-        return 1.0
-    floor = cfg.min_lr / cfg.learning_rate if cfg.learning_rate > 0 else 0.0
+    warmdown_iters = round(cfg.warmdown_ratio * cfg.max_iters)
+    warmdown_start = cfg.max_iters - warmdown_iters
     if it < cfg.warmup_iters:
-        return floor + (1.0 - floor) * (it + 1) / cfg.warmup_iters
-    if it > cfg.lr_decay_iters:
-        return floor
-    ratio = (it - cfg.warmup_iters) / max(1, cfg.lr_decay_iters - cfg.warmup_iters)
-    coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
-    return floor + coeff * (1.0 - floor)
+        # Linear warmup from min_lr_frac to 1.0
+        return cfg.min_lr_frac + (1.0 - cfg.min_lr_frac) * (it + 1) / max(1, cfg.warmup_iters)
+    elif it < warmdown_start:
+        return 1.0
+    else:
+        # Linear warmdown from 1.0 to min_lr_frac
+        progress = (cfg.max_iters - it) / max(1, warmdown_iters)
+        return cfg.min_lr_frac + (1.0 - cfg.min_lr_frac) * progress
+
+
+def get_muon_momentum(it: int) -> float:
+    """Muon momentum schedule (nanochat default).
+
+    Ramps from 0.85 → 0.97 over the first 400 steps, stays at 0.97 through
+    the plateau, then decays back to 0.90 during LR warmdown.
+    """
+    warmdown_iters = round(cfg.warmdown_ratio * cfg.max_iters)
+    warmdown_start = cfg.max_iters - warmdown_iters
+    if it < 400:
+        frac = it / 400
+        return (1 - frac) * 0.85 + frac * 0.97
+    elif it >= warmdown_start:
+        progress = (it - warmdown_start) / max(1, warmdown_iters)
+        return 0.97 * (1 - progress) + 0.90 * progress
+    else:
+        return 0.97
+
+
+def get_muon_wd(it: int) -> float:
+    """Cosine weight-decay schedule for Muon: decays from cfg.weight_decay → 0."""
+    return cfg.weight_decay * 0.5 * (1.0 + math.cos(math.pi * it / max(1, cfg.max_iters)))
 
 
 # ---------------------------------------------------------------------------
@@ -570,18 +584,21 @@ X, Y = next(train_iter)
 
 for iter_num in range(iter_num, cfg.max_iters):
 
-    # ---- LR update ----
+    # ---- LR / momentum / weight-decay update ----
+    lrm = get_lr_multiplier(iter_num)
     if cfg.optimizer.lower() == "muon_adamw":
-        # Scale each group's initial_lr proportionally — avoids clobbering
-        # the per-group LR ratios set by setup_optimizer().
-        lr_scale = get_lr_scale(iter_num)
+        muon_mom = get_muon_momentum(iter_num)
+        muon_wd  = get_muon_wd(iter_num)
         for pg in optimizer.param_groups:
-            pg["lr"] = pg.get("initial_lr", pg["lr"]) * lr_scale
-        lr = lr_scale * cfg.muon_matrix_lr  # representative value for logging
+            pg["lr"] = pg.get("initial_lr", pg["lr"]) * lrm
+            if pg.get("kind") == "muon":
+                pg["momentum"]     = muon_mom
+                pg["weight_decay"] = muon_wd
+        lr = lrm * cfg.muon_matrix_lr  # representative value for logging
     else:
-        lr = get_lr(iter_num)
         for pg in optimizer.param_groups:
-            pg["lr"] = lr
+            pg["lr"] = pg.get("initial_lr", pg["lr"]) * lrm
+        lr = lrm * cfg.learning_rate
 
     # ---- Temperature-shift intervention ----
     if cfg.temp_shift_step >= 0 and iter_num == cfg.temp_shift_step:
