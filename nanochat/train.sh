@@ -14,60 +14,31 @@
 #                 (default: <repo_root>/nanochat/nanochat_repo)
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# 1. GPU selection
-# ---------------------------------------------------------------------------
-GPUS="${GPUS:-0,1,2,3}"
+
+# -----------------------------------------------------------------------------
+# 2. GPU selection
+# -----------------------------------------------------------------------------
+GPUS="${GPUS:-2,3,4,5}"
 IFS=',' read -ra GPU_ARRAY <<< "$GPUS"
 NPROC=${#GPU_ARRAY[@]}
 export CUDA_VISIBLE_DEVICES="$GPUS"
 
-# ---------------------------------------------------------------------------
-# 2. Repository root — resolve from this script's location
-# ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# ---------------------------------------------------------------------------
-# 3. Environment setup
-# ---------------------------------------------------------------------------
-# W&B API key (optional — training proceeds without W&B if omitted)
-KEYS_DIR="${REPO_ROOT}/../.keys"
-if [[ -f "${KEYS_DIR}/wandb_api_key" ]]; then
-    export WANDB_API_KEY="$(cat "${KEYS_DIR}/wandb_api_key")"
-fi
+# -----------------------------------------------------------------------------
+# 2. Environment setup
+# -----------------------------------------------------------------------------
+# Paths 
+ROOT="$(pwd)" 
+KEYS_DIR="$ROOT/../../.keys"
+export WANDB_API_KEY="$(cat "$KEYS_DIR/wandb_api_key")"
 
-# Activate the nanochat uv environment.
-# The venv is created by ``uv sync --extra gpu`` inside the nanochat clone.
-NANOCHAT_DIR="${NANOCHAT_DIR:-${REPO_ROOT}/nanochat/nanochat_repo}"
-NANOCHAT_VENV="${NANOCHAT_DIR}/.venv"
-
-if [[ -f "${NANOCHAT_VENV}/bin/activate" ]]; then
-    # shellcheck disable=SC1090
-    source "${NANOCHAT_VENV}/bin/activate"
-    echo "[env] activated uv venv: ${NANOCHAT_VENV}"
-else
-    echo "[warn] uv venv not found at ${NANOCHAT_VENV}."
-    echo "       Run:  cd ${NANOCHAT_DIR} && uv sync --extra gpu"
-    exit 1
-fi
+eval "$(conda shell.bash hook)"
+conda activate entropy-vit
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-# ---------------------------------------------------------------------------
-# 4. Launch
-# ---------------------------------------------------------------------------
-cd "${REPO_ROOT}"
-
-torchrun --nproc_per_node="$NPROC" nanochat/base_train.py \
-    nanochat_dir="${NANOCHAT_DIR}" \
-    "$@"
-    # Uncomment and adapt as needed:
-    # config=d12 \
-    # max_iters=10000 \
-    # --lr 3e-4 \
-    # --bs 8 \
-    # temp_shift_step=5000 \
-    # temp_shift_factor=0.25 \
+# -----------------------------------------------------------------------------
+# 3. Script
+# -----------------------------------------------------------------------------
+torchrun --nproc_per_node="$NPROC" base_train.py \
