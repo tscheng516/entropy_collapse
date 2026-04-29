@@ -13,11 +13,11 @@ Logged every iteration:
 Logged every ``eval_interval``:
   * Val loss / accuracy
 
-Logged every ``hessian_freq``:
+Logged every ``hessian_intv``:
   * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher, KFAC
     (+ BFGS / FD when compute_fd=True)
 
-Logged every ``entropy_freq``:
+Logged every ``entropy_intv``:
   * Per-layer attention entropy
 
 Usage
@@ -32,7 +32,7 @@ Named preset::
 
 Override individual fields::
 
-    python base_train.py --lr 5e-4 --max_it 10000 hessian_freq=100
+    python base_train.py --lr 5e-4 --max_it 10000 hessian_intv=100
 
 Multi-GPU via torchrun::
 
@@ -122,8 +122,8 @@ parser.add_argument("--lr", type=float)
 parser.add_argument("--bs", type=int)
 parser.add_argument("--max_it", type=int)
 parser.add_argument("--num_workers", type=int)
-parser.add_argument("--hessian_freq", type=int)
-parser.add_argument("--entropy_freq", type=int)
+parser.add_argument("--hessian_intv", type=int)
+parser.add_argument("--entropy_intv", type=int)
 parser.add_argument("--wandb", type=str)
 parser.add_argument(
     "--temp_shift",
@@ -154,8 +154,8 @@ _maybe_set("learning_rate", known_args.lr)
 _maybe_set("batch_size", known_args.bs)
 _maybe_set("max_iters", known_args.max_it)
 _maybe_set("num_workers", known_args.num_workers)
-_maybe_set("hessian_freq", known_args.hessian_freq)
-_maybe_set("entropy_freq", known_args.entropy_freq)
+_maybe_set("hessian_intv", known_args.hessian_intv)
+_maybe_set("entropy_intv", known_args.entropy_intv)
 if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
@@ -646,7 +646,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         "bfgs": 0.0,
         "kfac": 0.0,
     }
-    if iter_num % cfg.hessian_freq == 0:
+    if iter_num % cfg.hessian_intv == 0:
         _raw_model.train()
         optimizer.zero_grad()
         try:
@@ -672,7 +672,7 @@ for iter_num in range(iter_num, cfg.max_iters):
 
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
-    _need_entropy = iter_num % cfg.entropy_freq == 0
+    _need_entropy = iter_num % cfg.entropy_intv == 0
 
     # Enable attention caching only when entropy will be read.
     if _need_entropy:
@@ -718,7 +718,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 f"iter {iter_num:5d} | loss {loss_val:.4f} | acc {train_acc:.1f}% "
                 f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
             )
-            if iter_num % cfg.hessian_freq == 0:
+            if iter_num % cfg.hessian_intv == 0:
                 _cmsg = (
                     f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
                     f"| H_VV {curvature['hessian_vv']:.3f} | GN {curvature['gn']:.3f} "
@@ -737,7 +737,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 "train/acc": train_acc,
                 "train/lr": lr,
             }
-            if iter_num % cfg.hessian_freq == 0:
+            if iter_num % cfg.hessian_intv == 0:
                 log_dict.update(
                     {
                         "hessian/lambda_max": curvature["hessian"],
@@ -756,7 +756,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                             "hessian/KFAC": curvature["kfac"],
                         }
                     )
-            if iter_num % cfg.entropy_freq == 0:
+            if iter_num % cfg.entropy_intv == 0:
                 log_dict.update(
                     {
                         f"entropy/layer_{i}": v
@@ -790,8 +790,8 @@ if not use_ddp or rank == 0:
     plot_history(
         pkl_path=history_path,
         out_dir=run_out_dir,
-        hessian_freq=cfg.hessian_freq,
-        entropy_freq=cfg.entropy_freq,
+        hessian_intv=cfg.hessian_intv,
+        entropy_intv=cfg.entropy_intv,
         skip_intv=True,
         lam=10.0,
         compute_fd=cfg.compute_fd,

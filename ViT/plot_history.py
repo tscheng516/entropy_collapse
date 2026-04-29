@@ -15,7 +15,7 @@ Custom output directory::
 Override frequencies (default 500)::
 
     python plot_history.py out/cifar100_vitb16/.../history.pkl \\
-        --hessian_freq 100 --entropy_freq 100
+        --hessian_intv 100 --entropy_intv 100
 
 Legacy carry-forward mode::
 
@@ -99,8 +99,8 @@ def _write_analysis_md(
     corr_results: dict,
     spike_all: dict[float, dict],   # z → {proxy: result_dict}
     lam: float,
-    hessian_freq: int,
-    entropy_freq: int,
+    hessian_intv: int,
+    entropy_intv: int,
     train_config: dict | None = None,
 ) -> None:
     """Write a Markdown analysis report to analysis.md."""
@@ -109,8 +109,8 @@ def _write_analysis_md(
         "",
         f"- **Source**: `{pkl_path}`",
         f"- **Smoothing λ**: {lam}",
-        f"- **Hessian freq**: {hessian_freq}",
-        f"- **Entropy freq**: {entropy_freq}",
+        f"- **Hessian freq**: {hessian_intv}",
+        f"- **Entropy freq**: {entropy_intv}",
         "",
     ]
 
@@ -125,8 +125,8 @@ def _write_analysis_md(
             ("Optimiser", ["optimizer", "learning_rate", "max_iters", "weight_decay",
                            "beta1", "beta2", "grad_clip", "eps"]),
             ("LR Schedule", ["decay_lr", "warmup_iters", "lr_decay_iters", "min_lr"]),
-            ("Hessian", ["hessian_freq", "hessian_max_iter", "hessian_batch_size", "compute_fd"]),
-            ("Entropy", ["entropy_freq"]),
+            ("Hessian", ["hessian_intv", "hessian_max_iter", "hessian_batch_size", "compute_fd"]),
+            ("Entropy", ["entropy_intv"]),
             ("Intervention", ["temp_shift_step", "temp_shift_factor"]),
             ("Compute", ["device", "compile", "dtype", "seed"]),
             ("I/O", ["out_dir", "eval_interval", "log_interval",
@@ -222,8 +222,8 @@ def _write_analysis_md(
 def plot_history(
     pkl_path: str,
     out_dir: str | None = None,
-    hessian_freq: int = 500,
-    entropy_freq: int = 500,
+    hessian_intv: int = 500,
+    entropy_intv: int = 500,
     skip_intv: bool = True,
     lam: float = 10.0,
     compute_fd: bool = False,
@@ -241,8 +241,8 @@ def plot_history(
     Args:
         pkl_path:     Path to a ``history.pkl`` file.
         out_dir:      Output directory; defaults to same dir as pkl_path.
-        hessian_freq: Hessian frequency used during training.
-        entropy_freq: Entropy frequency used during training.
+        hessian_intv: Hessian frequency used during training.
+        entropy_intv: Entropy frequency used during training.
         skip_intv:    True (default) = interval-skipping; False = carry-forward.
         lam:          Whittaker–Henderson smoothing strength.
         compute_fd:   Include BFGS/FD metrics (must match training config).
@@ -269,7 +269,7 @@ def plot_history(
         # --- Correlations ---
         corr_results = print_correlations(
             history, run_label, lam=lam, include_smooth=True,
-            skip_intv=skip_intv, hessian_freq=hessian_freq,
+            skip_intv=skip_intv, hessian_intv=hessian_intv,
             compute_fd=compute_fd,
         )
 
@@ -281,7 +281,7 @@ def plot_history(
             lrs={run_label: lr_peak},
             save_path=os.path.join(out_dir, "training_dynamics.png"),
             skip_intv=skip_intv,
-            entropy_freq=entropy_freq,
+            entropy_intv=entropy_intv,
         )
         plt.close(fig)
         print(f"[plot] training_dynamics.png")
@@ -291,7 +291,7 @@ def plot_history(
             history, lam=lam,
             save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
             skip_intv=skip_intv,
-            hessian_freq=hessian_freq,
+            hessian_intv=hessian_intv,
             compute_fd=compute_fd,
         )
         plt.close(fig_smooth)
@@ -307,7 +307,7 @@ def plot_history(
             spike_figs, spike_results = plot_all_spike_cooccurrences(
                 history, window=15, z_score=z, log_scale=True,
                 save_dir=out_dir, skip_intv=skip_intv,
-                hessian_freq=hessian_freq, compute_fd=compute_fd,
+                hessian_intv=hessian_intv, compute_fd=compute_fd,
             )
             for fig_spike in spike_figs.values():
                 plt.close(fig_spike)
@@ -339,8 +339,8 @@ def plot_history(
         corr_results=corr_results,
         spike_all=spike_all,
         lam=lam,
-        hessian_freq=hessian_freq,
-        entropy_freq=entropy_freq,
+        hessian_intv=hessian_intv,
+        entropy_intv=entropy_intv,
         train_config=history.get("config"),
     )
 
@@ -355,11 +355,11 @@ def main():
         help="Output directory (default: same dir as pkl_path)",
     )
     parser.add_argument(
-        "--hessian_freq", type=int, default=500,
+        "--hessian_intv", type=int, default=500,
         help="Hessian computation frequency used during training (default: 500)",
     )
     parser.add_argument(
-        "--entropy_freq", type=int, default=500,
+        "--entropy_intv", type=int, default=500,
         help="Entropy computation frequency used during training (default: 500)",
     )
     parser.add_argument(
@@ -379,8 +379,8 @@ def main():
     plot_history(
         pkl_path=args.pkl_path,
         out_dir=args.out_dir,
-        hessian_freq=args.hessian_freq,
-        entropy_freq=args.entropy_freq,
+        hessian_intv=args.hessian_intv,
+        entropy_intv=args.entropy_intv,
         skip_intv=not args.no_skip_intv,
         lam=args.lam,
         compute_fd=args.compute_fd,
