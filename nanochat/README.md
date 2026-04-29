@@ -50,6 +50,15 @@ uv pip install -r ../../nanochat/requirements.txt   # research extras
 conda create -n entropy-nanochat python=3.11 -y
 conda activate entropy-nanochat
 cd nanochat/nanochat_repo
+```
+
+nanochat's `pyproject.toml` uses a flat layout with `dev/`, `runs/`, and
+`nanochat/` directories; setuptools will refuse to build it unless you tell it
+which package to include.  Patch the file before installing:
+
+```bash
+# Restrict setuptools discovery to only the nanochat package
+echo -e '\n[tool.setuptools.packages.find]\ninclude = ["nanochat*"]' >> pyproject.toml
 pip install -e ".[gpu]"
 pip install -r ../../nanochat/requirements.txt
 ```
