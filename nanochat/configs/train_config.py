@@ -156,6 +156,16 @@ class TrainConfig:
     seed: int = 1337
     num_workers: int = 4            # tokenizer threads for nanochat dataloader
     batch_size: int = 8             # sequences per GPU per step
+    compute_dtype: str = "fp32"
+    # 'fp32' — float32 master weights throughout (default, recommended).
+    #           Avoids a dtype mismatch in nanochat's @torch.compile'd
+    #           ``adamw_step_fused``: when COMPUTE_DTYPE=bf16, wte and
+    #           value_embeds are cast to bf16, their gradients are bf16, but
+    #           the optimizer's hyperparameter 0-D tensors stay float32.
+    #           torch.compile traces ``lerp_(bf16, bf16, float32)`` → crash.
+    # 'bf16' — bfloat16 embeddings/activations (nanochat speedrun setting).
+    #           Only safe with optimizer='adamw' (PyTorch AdamW handles mixed
+    #           dtypes); muon_adamw + bf16 will hit the compiled lerp_ bug.
 
     # skip_intv: carry-forward mode for plot_history (True = interval-skip)
     skip_intv: bool = False

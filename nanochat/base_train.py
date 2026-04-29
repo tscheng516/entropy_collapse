@@ -183,6 +183,43 @@ if _nanochat_dir not in sys.path:
     sys.path.insert(0, _nanochat_dir)
 
 # ---------------------------------------------------------------------------
+# 2b. Patch nanochat.common.COMPUTE_DTYPE BEFORE any nanochat module is
+#     imported.  nanochat's gpt.py and optim.py do
+#     ``from nanochat.common import COMPUTE_DTYPE`` at module load time, so
+#     the patch must land in sys.modules before their first import.
+#
+#     Root cause of the bf16 crash:
+#       init_weights() casts wte + value_embeds to COMPUTE_DTYPE (bf16).
+#       Their gradients are also bf16.  adamw_step_fused is
+#       @torch.compile(fullgraph=True) and calls
+#           exp_avg.lerp_(grad, 1 - beta1_t)
+#       where beta1_t is a float32 0-D CPU tensor.  torch.compile traces
+#       lerp_(bf16, bf16, float32) → TorchRuntimeError dtype mismatch.
+#       The Muon path avoids this with an explicit .to(stacked_grads.dtype)
+#       cast; the AdamW path does not.
+# ---------------------------------------------------------------------------
+import nanochat.common as _nanochat_common  # noqa: E402
+
+_nc_dtype = (
+    torch.bfloat16
+    if cfg.compute_dtype.lower() in ("bf16", "bfloat16")
+    else torch.float32
+)
+_nanochat_common.COMPUTE_DTYPE = _nc_dtype
+
+if _is_master:
+    print(f"[dtype] nanochat COMPUTE_DTYPE → {_nc_dtype}")
+
+if _nc_dtype == torch.bfloat16 and cfg.optimizer.lower() == "muon_adamw":
+    if _is_master:
+        print(
+            "[warn] compute_dtype=bf16 + optimizer=muon_adamw will likely "
+            "crash: nanochat's compiled adamw_step_fused does not cast its "
+            "float32 hyperparameter scalars to match bf16 embedding params. "
+            "Switch to optimizer=adamw for safe bf16 pre-training."
+        )
+
+# ---------------------------------------------------------------------------
 # 3.  Reproducibility & device
 # ---------------------------------------------------------------------------
 torch.manual_seed(cfg.seed)
