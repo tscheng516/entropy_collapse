@@ -124,7 +124,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_freq: int = 500
+    hessian_intv: int = 500
     # Compute all nine curvature proxies every N iterations.
     hessian_max_iter: int = 10
     # Power-iteration steps for λ_max estimation.
@@ -137,7 +137,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_freq: int = 500
+    entropy_intv: int = 500
     # Compute per-layer attention entropy every N iterations.
 
     # ------------------------------------------------------------------ #

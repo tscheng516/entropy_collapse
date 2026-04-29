@@ -771,6 +771,8 @@ for iter_num in range(iter_num, cfg.max_iters):
 _save_checkpoint("final_ckpt")
 
 if not use_ddp or rank == 0:
+    import dataclasses
+    history["config"] = dataclasses.asdict(cfg)
     history_path = os.path.join(run_out_dir, "history.pkl")
     with open(history_path, "wb") as f:
         pickle.dump(history, f)

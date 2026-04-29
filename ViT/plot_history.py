@@ -101,6 +101,7 @@ def _write_analysis_md(
     lam: float,
     hessian_freq: int,
     entropy_freq: int,
+    train_config: dict | None = None,
 ) -> None:
     """Write a Markdown analysis report to analysis.md."""
     lines = [
@@ -112,6 +113,42 @@ def _write_analysis_md(
         f"- **Entropy freq**: {entropy_freq}",
         "",
     ]
+
+    if train_config:
+        lines += ["## Training Configuration", ""]
+        # Group config fields by category for readability
+        _cfg_groups = [
+            ("Model", ["model_name", "pretrained", "num_classes", "img_size",
+                        "depth", "num_heads", "embed_dim", "patch_size",
+                        "init_std", "use_scaled_init", "qk_norm", "label_smoothing"]),
+            ("Data", ["dataset", "data_dir", "batch_size", "num_workers"]),
+            ("Optimiser", ["optimizer", "learning_rate", "max_iters", "weight_decay",
+                           "beta1", "beta2", "grad_clip", "eps"]),
+            ("LR Schedule", ["decay_lr", "warmup_iters", "lr_decay_iters", "min_lr"]),
+            ("Hessian", ["hessian_freq", "hessian_max_iter", "hessian_batch_size", "compute_fd"]),
+            ("Entropy", ["entropy_freq"]),
+            ("Intervention", ["temp_shift_step", "temp_shift_factor"]),
+            ("Compute", ["device", "compile", "dtype", "seed"]),
+            ("I/O", ["out_dir", "eval_interval", "log_interval",
+                      "checkpoint_interval", "save_checkpoint", "init_from"]),
+            ("W&B", ["wandb_log", "wandb_project", "wandb_run_name"]),
+        ]
+        for group_name, keys in _cfg_groups:
+            group_rows = [[k, str(train_config[k])] for k in keys if k in train_config]
+            if not group_rows:
+                continue
+            lines.append(f"### {group_name}")
+            lines.append("")
+            lines.append(_md_table(["Parameter", "Value"], group_rows))
+            lines.append("")
+        # Any remaining keys not covered by the groups above
+        covered = {k for _, keys in _cfg_groups for k in keys}
+        extra_rows = [[k, str(v)] for k, v in sorted(train_config.items()) if k not in covered]
+        if extra_rows:
+            lines.append("### Other")
+            lines.append("")
+            lines.append(_md_table(["Parameter", "Value"], extra_rows))
+            lines.append("")
 
     proxy_display = {
         "H vs Prec_H":           "H vs Prec_H",
@@ -304,6 +341,7 @@ def plot_history(
         lam=lam,
         hessian_freq=hessian_freq,
         entropy_freq=entropy_freq,
+        train_config=history.get("config"),
     )
 
 
