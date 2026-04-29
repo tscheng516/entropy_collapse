@@ -130,8 +130,8 @@ parser.add_argument("--lr", type=float)
 parser.add_argument("--bs", type=int)
 parser.add_argument("--max_it", type=int)
 parser.add_argument("--num_workers", type=int)
-parser.add_argument("--hessian_freq", type=int)
-parser.add_argument("--entropy_freq", type=int)
+parser.add_argument("--hessian_intv", type=int)
+parser.add_argument("--entropy_intv", type=int)
 parser.add_argument("--wandb", type=str)
 parser.add_argument(
     "--temp_shift",
@@ -162,8 +162,8 @@ _maybe_set("learning_rate", known_args.lr)
 _maybe_set("batch_size", known_args.bs)
 _maybe_set("max_iters", known_args.max_it)
 _maybe_set("num_workers", known_args.num_workers)
-_maybe_set("hessian_freq", known_args.hessian_freq)
-_maybe_set("entropy_freq", known_args.entropy_freq)
+_maybe_set("hessian_intv", known_args.hessian_intv)
+_maybe_set("entropy_intv", known_args.entropy_intv)
 if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
@@ -578,7 +578,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         "gn": 0.0, "fd": 0.0, "diag_h": 0.0,
         "fisher": 0.0, "bfgs": 0.0, "kfac": 0.0,
     }
-    if iter_num % cfg.hessian_freq == 0:
+    if iter_num % cfg.hessian_intv == 0:
         _raw_model.train()
         optimizer.zero_grad()
         try:
@@ -604,7 +604,7 @@ for iter_num in range(iter_num, cfg.max_iters):
 
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
-    _need_entropy = iter_num % cfg.entropy_freq == 0
+    _need_entropy = iter_num % cfg.entropy_intv == 0
 
     if _need_entropy:
         for blk in _raw_model.transformer.h:
@@ -648,7 +648,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 f"iter {iter_num:5d} | loss {loss_val:.4f} "
                 f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
             )
-            if iter_num % cfg.hessian_freq == 0:
+            if iter_num % cfg.hessian_intv == 0:
                 _cmsg = (
                     f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
                     f"| H_VV {curvature['hessian_vv']:.3f} | GN {curvature['gn']:.3f} "
@@ -666,7 +666,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 "train/loss": loss_val,
                 "train/lr": lr,
             }
-            if iter_num % cfg.hessian_freq == 0:
+            if iter_num % cfg.hessian_intv == 0:
                 log_dict.update({
                     "hessian/lambda_max": curvature["hessian"],
                     "hessian/prec_H": curvature["prec_h"],
@@ -681,7 +681,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                         "hessian/BFGS": curvature["bfgs"],
                         "hessian/KFAC": curvature["kfac"],
                     })
-            if iter_num % cfg.entropy_freq == 0:
+            if iter_num % cfg.entropy_intv == 0:
                 log_dict.update({
                     f"entropy/layer_{i}": v
                     for i, v in enumerate(layer_entropies)
@@ -711,8 +711,8 @@ if not use_ddp or rank == 0:
     plot_history(
         pkl_path=history_path,
         out_dir=run_out_dir,
-        hessian_freq=cfg.hessian_freq,
-        entropy_freq=cfg.entropy_freq,
+        hessian_intv=cfg.hessian_intv,
+        entropy_intv=cfg.entropy_intv,
         skip_intv=True,
         lam=10.0,
         compute_fd=cfg.compute_fd,
