@@ -128,7 +128,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_freq: int = 500
+    hessian_intv: int = 500
     hessian_max_iter: int = 10
     hessian_batch_size: int = 2
     # Keep small for long sequences: attention memory ∝ B·T².
@@ -140,7 +140,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_freq: int = 500
+    entropy_intv: int = 500
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention
@@ -189,8 +189,8 @@ class D8Config(TrainConfig):
     learning_rate: float = 5e-4
     min_lr: float = 5e-5
 
-    hessian_freq: int = 200
-    entropy_freq: int = 50
+    hessian_intv: int = 200
+    entropy_intv: int = 50
 
 
 @dataclass
@@ -219,8 +219,8 @@ class D12Config(TrainConfig):
     learning_rate: float = 3e-4
     min_lr: float = 3e-5
 
-    hessian_freq: int = 500
-    entropy_freq: int = 100
+    hessian_intv: int = 500
+    entropy_intv: int = 100
 
 
 @dataclass
@@ -252,9 +252,9 @@ class D24Config(TrainConfig):
     learning_rate: float = 2e-4
     min_lr: float = 2e-5
 
-    hessian_freq: int = 1000
+    hessian_intv: int = 1000
     hessian_batch_size: int = 1   # large model + long seq → keep at 1
-    entropy_freq: int = 200
+    entropy_intv: int = 200
 
 
 # Registry used by CLI ``config=<key>``

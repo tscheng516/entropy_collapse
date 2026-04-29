@@ -102,7 +102,7 @@ def plot_curvature_smoothed_comparison(
     lam: float = 100.0,
     save_path: str | None = None,
     skip_intv: bool = True,
-    hessian_freq: int = 1,
+    hessian_intv: int = 1,
     compute_fd: bool = False,
 ) -> plt.Figure:
     """
@@ -131,7 +131,7 @@ def plot_curvature_smoothed_comparison(
                       plot only actually-measured values against their true
                       iteration indices.  If False, use the legacy
                       ``_carry_forward_positive`` step-function fill.
-        hessian_freq: Hessian computation frequency (used for x-axis label).
+        hessian_intv: Hessian computation frequency (used for x-axis label).
         compute_fd:   If False (default), skip BFGS and FD metrics entirely.
                       Set to True only if the training run had compute_fd
                       enabled in its TrainConfig.
@@ -283,7 +283,7 @@ def plot_curvature_smoothed_comparison(
 
     ax.set_yscale("log")
     ax.set_title(f"All Curvature Metrics (λ_max) — Raw vs Smoothed (λ={lam})", fontsize=13)
-    _xlabel = f"Iteration (every {hessian_freq})" if skip_intv and hessian_freq > 1 else "Iteration"
+    _xlabel = f"Iteration (every {hessian_intv})" if skip_intv and hessian_intv > 1 else "Iteration"
     ax.set_xlabel(_xlabel, fontsize=12)
     ax.set_ylabel("Spectral Norm (λ_max)", fontsize=12)
     ax.legend(fontsize="small", loc="best")
@@ -447,7 +447,7 @@ def plot_all_spike_cooccurrences(
     log_scale: bool = True,
     save_dir: str | None = None,
     skip_intv: bool = True,
-    hessian_freq: int = 1,
+    hessian_intv: int = 1,
     compute_fd: bool = False,
 ) -> tuple[dict[str, plt.Figure], dict[str, dict]]:
     """
@@ -522,7 +522,7 @@ def print_correlations(
     lam: float = 10.0,
     include_smooth: bool = True,
     skip_intv: bool = True,
-    hessian_freq: int = 1,
+    hessian_intv: int = 1,
     compute_fd: bool = False,
 ) -> dict:
     """
@@ -687,7 +687,7 @@ def plot_training_dynamics(
     lrs: dict[str, float],
     save_path: str | None = None,
     skip_intv: bool = True,
-    entropy_freq: int = 1,
+    entropy_intv: int = 1,
 ) -> plt.Figure:
     """
     Plot compact training dynamics for one or two runs.
@@ -705,7 +705,7 @@ def plot_training_dynamics(
         save_path:    If provided, save the figure to this path.
         skip_intv:    If True (default), skip zero-placeholder rows in the
                       entropy matrix and plot only actually-measured values.
-        entropy_freq: Entropy computation frequency (used for x-axis label).
+        entropy_intv: Entropy computation frequency (used for x-axis label).
 
     Returns:
         The matplotlib ``Figure`` object.
@@ -805,8 +805,8 @@ def plot_training_dynamics(
                     label=f"Layer {layer_idx + 1}",
                 )
         ax_ent.set_title(f"{name} Attention Entropy (Per Layer)")
-        _ent_xlabel = (f"Iteration (every {entropy_freq})"
-                       if skip_intv and entropy_freq > 1 else "Iteration")
+        _ent_xlabel = (f"Iteration (every {entropy_intv})"
+                       if skip_intv and entropy_intv > 1 else "Iteration")
         ax_ent.set_xlabel(_ent_xlabel)
         ax_ent.set_ylabel("Entropy (nats)")
         ax_ent.legend(fontsize="small", ncol=2)

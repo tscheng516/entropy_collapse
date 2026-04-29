@@ -10,7 +10,7 @@ The harness adds:
   fully differentiable (required for Hessian-vector products).
 - **Nine curvature proxies** — λ_max of H, Prec_H, H_VV (value subspace), GN,
   Diag_H, Fisher, KFAC; plus optional FD / BFGS.
-- **Per-layer attention entropy** logged every `entropy_freq` steps.
+- **Per-layer attention entropy** logged every `entropy_intv` steps.
 - **Temperature-shift intervention** — one-shot sharpening/softening of all
   attention heads at a configurable step.
 
@@ -137,8 +137,8 @@ Any `TrainConfig` field can be overridden as `key=value`:
 python nanochat/base_train.py config=d12 \
     learning_rate=1e-4 \
     max_iters=20000 \
-    hessian_freq=200 \
-    entropy_freq=50 \
+    hessian_intv=200 \
+    entropy_intv=50 \
     temp_shift_step=5000 \
     temp_shift_factor=0.25
 ```
@@ -177,7 +177,7 @@ analysis.txt / analysis.md
 
 ```bash
 python nanochat/plot_history.py out/nanochat/d12/<timestamp>/history.pkl \
-    --hessian_freq 500 --entropy_freq 100
+    --hessian_intv 500 --entropy_intv 100
 ```
 
 ---

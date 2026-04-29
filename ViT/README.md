@@ -65,8 +65,8 @@ python ViT/base_train.py config=imagenet1k_base \
     learning_rate=5e-4 \
     max_iters=100000 \
     warmup_iters=10000 \
-    hessian_freq=10 \
-    entropy_freq=5 \
+    hessian_intv=10 \
+    entropy_intv=5 \
     wandb_log=true \
     wandb_run_name=vit-b16-imagenet-run
 ```
