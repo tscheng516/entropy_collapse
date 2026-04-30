@@ -197,6 +197,7 @@ class D8Config(TrainConfig):
     n_embd: int = 512
     sequence_len: int = 512
 
+    wandb_log: bool = True
     out_dir: str = "out/nanochat/d8"
     wandb_project: str = "entropy-collapse-nanochat-d8"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
