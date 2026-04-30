@@ -136,7 +136,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_intv: int = 500
+    hessian_intv: int = 50
     hessian_max_iter: int = 10
     hessian_batch_size: int = 2
     # Keep small for long sequences: attention memory ∝ B·T².
@@ -148,7 +148,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_intv: int = 500
+    entropy_intv: int = 50
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention
@@ -207,7 +207,7 @@ class D8Config(TrainConfig):
     warmup_iters: int = 250           # ~1% of max_iters
     learning_rate: float = 5e-4
 
-    hessian_intv: int = 250
+    hessian_intv: int = 50
     entropy_intv: int = 50
 
 
@@ -237,8 +237,8 @@ class D12Config(TrainConfig):
     warmup_iters: int = 650           # ~1% of max_iters
     learning_rate: float = 3e-4
 
-    hessian_intv: int = 500
-    entropy_intv: int = 100
+    hessian_intv: int = 50
+    entropy_intv: int = 50
 
 
 @dataclass
