@@ -233,7 +233,12 @@ def get_curvature_metrics(
     is_adam = False
     for param in params_vals:
         state = optimizer.state.get(param, {})
-        if "exp_avg_sq" in state and state["exp_avg_sq"].numel() > 0:
+        # DistMuonAdamW (DDP) shards exp_avg_sq: each rank stores only
+        # param.shape[0]//world_size rows.  The sharded tensor has
+        # numel() == param.numel() / world_size, NOT param.numel().
+        # Guard against this with an exact-size check; fall back to ones
+        # (same as iter-0 behaviour when no state exists yet).
+        if "exp_avg_sq" in state and state["exp_avg_sq"].numel() == param.numel():
             is_adam = True
             v_sq = state["exp_avg_sq"]
             step = state.get("step", 1)
