@@ -27,7 +27,7 @@ KEYS_DIR="$ROOT/../../.keys"
 export WANDB_API_KEY="$(cat "$KEYS_DIR/wandb_api_key")"
 
 eval "$(conda shell.bash hook)"
-conda activate entropy-vit
+conda activate entropy-vit5
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
