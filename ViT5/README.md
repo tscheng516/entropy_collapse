@@ -9,7 +9,41 @@ and layer-scale.  Only the Base variant (~87 M parameters) is included here.
 
 ## Quick Setup
 
-### 1. Install dependencies
+### 1. Check your CUDA version (servers)
+
+Before installing PyTorch on a GPU server, confirm which CUDA version the
+driver exposes.  The driver's reported CUDA version is the **maximum** toolkit
+version it supports; choose a PyTorch wheel compiled against that version or
+earlier.
+
+```bash
+# Most reliable — shows driver version and max supported CUDA
+nvidia-smi
+
+# Shows the installed CUDA toolkit version (may differ from the driver's max)
+nvcc --version
+
+# After PyTorch is installed, confirm it sees the GPU
+python -c "import torch; print('PyTorch:', torch.__version__, \
+    '| CUDA build:', torch.version.cuda, \
+    '| GPU available:', torch.cuda.is_available())"
+```
+
+Match the `nvidia-smi` CUDA version to the correct wheel tag:
+
+| `nvidia-smi` CUDA Version | Recommended wheel tag | `--index-url` suffix |
+|---|---|---|
+| 11.8 | `cu118` | `/whl/cu118` |
+| 12.1 | `cu121` | `/whl/cu121` |
+| 12.4 | `cu124` | `/whl/cu124` |
+| ≥ 12.6 | `cu126` | `/whl/cu126` |
+
+> If `nvidia-smi` is not found, the server may have no GPU or the NVIDIA driver
+> is not installed — use the CPU-only PyTorch wheel (no `--index-url` needed).
+
+---
+
+### 2. Install dependencies
 
 ```bash
 # venv
@@ -26,12 +60,48 @@ conda create -n entropy-vit5 python=3.10 -y && conda activate entropy-vit5
 pip install -r requirements.txt
 ```
 
-> **CUDA variants** — `requirements.txt` pins `torch==2.4.1` for CUDA 12.1.
-> For other CUDA versions install PyTorch first, then the rest:
+> **CUDA variants** — `requirements.txt` pins `torch==2.4.1`.  The default
+> PyPI wheel is CUDA 12.1.  For other CUDA versions install PyTorch first from
+> the matching index URL, then install the remaining dependencies:
+>
 > ```bash
-> # CUDA 11.8 example
-> pip install torch==2.4.1 torchvision --index-url https://download.pytorch.org/whl/cu118
-> pip install -r requirements.txt --no-deps   # torch already installed
+> # CUDA 11.8
+> pip install torch==2.4.1 torchvision==0.19.1 \
+>     --index-url https://download.pytorch.org/whl/cu118
+> pip install -r requirements.txt
+>
+> # CUDA 12.1 (default)
+> pip install torch==2.4.1 torchvision==0.19.1 \
+>     --index-url https://download.pytorch.org/whl/cu121
+> pip install -r requirements.txt
+>
+> # CUDA 12.4
+> pip install torch==2.4.1 torchvision==0.19.1 \
+>     --index-url https://download.pytorch.org/whl/cu124
+> pip install -r requirements.txt
+> ```
+>
+> `pip install -r requirements.txt` is safe to run after the CUDA-specific
+> torch install: pip sees `torch==2.4.1` is already satisfied and skips it,
+> so the CUDA build is not overwritten.  Do **not** pass `--no-deps` here —
+> that would suppress the transitive dependencies of `timm`, `einops`,
+> `datasets`, and `wandb`.
+
+> **`timm==0.4.12` + Python 3.10 compatibility** — Python 3.10 removed
+> `collections.Callable` (use `collections.abc.Callable` instead).
+> timm 0.4.12 triggers this in some code paths.  If you hit a
+> `AttributeError: module 'collections' has no attribute 'Callable'` error,
+> apply the one-line patch before importing timm:
+> ```python
+> import collections, collections.abc
+> collections.Callable = collections.abc.Callable      # timm 0.4.12 shim
+> import timm
+> ```
+> or run:
+> ```bash
+> python -c "import collections, collections.abc; \
+>     collections.Callable = collections.abc.Callable; import timm" \
+>     && echo "timm OK"
 > ```
 
 > **Why timm 0.4.12?**  ViT-5's model code imports
@@ -39,7 +109,7 @@ pip install -r requirements.txt
 > `timm.models.layers.{DropPath,trunc_normal_}`, which were removed in later
 > timm versions.
 
-### 2. (Optional) Flash Attention
+### 3. (Optional) Flash Attention
 
 For faster training on Ampere+ GPUs:
 
@@ -49,7 +119,7 @@ pip install flash-attn --no-build-isolation
 
 The default config runs with `flash=False` to keep Hessian computation stable.
 
-### 3. Train (default: ViT-5-Base on CIFAR-100)
+### 4. Train (default: ViT-5-Base on CIFAR-100)
 
 ```bash
 python base_train.py
@@ -167,7 +237,7 @@ Override the smoothing strength: `python plot_history.py history.pkl --lam 20`
 
 ## Differences from `ViT/`
 
-| Aspect             | `ViT/`                          | ``                          |
+| Aspect             | `ViT/`                          | `ViT5/`                          |
 |--------------------|----------------------------------|-----------------------------------|
 | Model              | timm ViT (various sizes)        | ViT-5-Base (fixed)                |
 | Norm               | LayerNorm                        | RMSNorm                           |
@@ -184,7 +254,7 @@ Override the smoothing strength: `python plot_history.py history.pkl --lam 20`
 
 ## Shared data cache
 
-Both `ViT/` and `` use `data_dir="./data"` as the default root for
+Both `ViT/` and `ViT5/` use `data_dir="./data"` as the default root for
 torchvision downloads.  When both training scripts are run from the repository
 root, they share the same CIFAR-100 download without duplicating it.
 
