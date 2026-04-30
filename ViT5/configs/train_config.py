@@ -64,7 +64,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Weights & Biases
     # ------------------------------------------------------------------ #
-    wandb_log: bool = True
+    wandb_log: bool = False  # disabled in pilot test; enable with wandb_log=true
     wandb_project: str = "entropy-collapse-vit5"
     wandb_run_name: str = "run"
 
@@ -79,7 +79,7 @@ class TrainConfig:
     #   the repo root with the same data_dir default).
     # ImageNet: directory with train/ and val/ in ImageFolder layout.
 
-    batch_size: int = 256
+    batch_size: int = 32  # small batch for pilot test; increase to 256 for main experiments
     num_workers: int = 8
 
     # ------------------------------------------------------------------ #
@@ -113,7 +113,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     optimizer: str = "adamw"            # 'adamw' | 'sgd'
     learning_rate: float = 3e-3         # ViT-5-Base default (LAMB lr transplanted)
-    max_iters: int = 1000
+    max_iters: int = 200  # fast pilot; set to 50000 for main experiments
     weight_decay: float = 0.05          # ViT-5-Base default
     beta1: float = 0.9
     beta2: float = 0.999
@@ -131,7 +131,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_freq: int = 100
+    hessian_intv: int = 50
     hessian_max_iter: int = 10
     hessian_batch_size: int = 128
     compute_fd: bool = False
@@ -139,7 +139,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_freq: int = 100
+    entropy_intv: int = 50
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention

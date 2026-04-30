@@ -1,40 +1,43 @@
-# ViT-5 Entropy-Collapse Experiments
+# ViT-5 — Entropy Collapse Experiments
 
-Entropy-collapse experiments using **ViT-5** (Wang et al., 2025 —
-[arXiv:2602.08071](https://arxiv.org/abs/2602.08071)), adapted from the `ViT/`
-folder in this repository.
-
-ViT-5-Base uses RMSNorm, per-head QK-normalisation, 2-D RoPE, register tokens,
-and layer-scale — all enabled by default.  Only the Base variant (87 M
-parameters) is included here.
+Entropy-collapse analysis for **ViT-5-Base** (Wang et al., 2025 —
+[arXiv:2602.08071](https://arxiv.org/abs/2602.08071)), extending the `ViT/`
+experiments with RMSNorm, per-head QK-normalisation, 2-D RoPE, register tokens,
+and layer-scale.  Only the Base variant (~87 M parameters) is included here.
 
 ---
 
-## Installation
+## Quick Setup
 
-### 1. Install PyTorch
-
-Follow [pytorch.org](https://pytorch.org/get-started/locally/) for your CUDA
-version.  The codebase is tested with PyTorch 2.4.1:
+### 1. Install dependencies
 
 ```bash
-pip install torch==2.4.1 torchvision --index-url https://download.pytorch.org/whl/cu121
+# venv
+python3.10 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r ViT5/requirements.txt
 ```
-
-### 2. Install ViT-5 dependencies
-
-ViT-5 requires **timm 0.4.12** (older API) and **einops**:
 
 ```bash
-pip install timm==0.4.12 einops
+# Conda
+conda create -n entropy-vit5 python=3.10 -y && conda activate entropy-vit5
+pip install -r ViT5/requirements.txt
 ```
+
+> **CUDA variants** — `requirements.txt` pins `torch==2.4.1` for CUDA 12.1.
+> For other CUDA versions install PyTorch first, then the rest:
+> ```bash
+> # CUDA 11.8 example
+> pip install torch==2.4.1 torchvision --index-url https://download.pytorch.org/whl/cu118
+> pip install -r ViT5/requirements.txt --no-deps   # torch already installed
+> ```
 
 > **Why timm 0.4.12?**  ViT-5's model code imports
 > `timm.models.vision_transformer.{Mlp,PatchEmbed}` and
 > `timm.models.layers.{DropPath,trunc_normal_}`, which were removed in later
 > timm versions.
 
-### 3. (Optional) Install Flash Attention
+### 2. (Optional) Flash Attention
 
 For faster training on Ampere+ GPUs:
 
@@ -42,60 +45,102 @@ For faster training on Ampere+ GPUs:
 pip install flash-attn --no-build-isolation
 ```
 
-The default ViT-5-Base config in this repo runs with `flash=False` (standard
-PyTorch attention) to keep Hessian computation stable.
+The default config runs with `flash=False` to keep Hessian computation stable.
 
-### 4. Install the rest of the requirements
+### 3. Train (default: ViT-5-Base on CIFAR-100)
 
 ```bash
-pip install -r ViT5/requirements.txt
+python ViT5/base_train.py
+```
+
+CIFAR-100 is downloaded automatically on first run.
+
+---
+
+## Config Presets
+
+Select a preset with `config=<name>` on the command line.
+Each preset is a `@dataclass` defined in `configs/train_config.py`.
+
+| Preset | Dataset | img\_size | Seq len | Batch | LR | Max Iters |
+|---|---|---|---|---|---|---|
+| `default` | CIFAR-100 | 32 | 69 (64 + CLS + 4 reg) | 32 | 3e-3 | 200 |
+| `cifar100_base` | CIFAR-100 | 32 | 69 | 256 | 3e-3 | 50 000 |
+| `imagenet1k_base` | ImageNet-1k | 192 | 149 (144 + CLS + 4 reg) | 256 | 3e-3 | 50 000 |
+
+Sequence length = patches + CLS token + 4 register tokens.
+
+```bash
+python ViT5/base_train.py config=imagenet1k_base
+bash  ViT5/train.sh        config=cifar100_base   # multi-GPU via torchrun
 ```
 
 ---
 
-## Training
+## Advanced Experiments
 
-### CIFAR-100 (default)
+### Override individual flags
+
+Any `TrainConfig` field can be overridden on the command line after the preset:
 
 ```bash
-python ViT5/base_train.py config=cifar100_base
+python ViT5/base_train.py config=cifar100_base \
+    learning_rate=1e-3 \
+    max_iters=50000 \
+    hessian_intv=500 \
+    entropy_intv=500 \
+    wandb_log=true \
+    wandb_run_name=vit5-base-cifar100-run1
 ```
 
-### ImageNet-1k
+### Multi-GPU training
+
+`train.sh` wraps `torchrun`. Set `GPUS` to select devices:
+
+```bash
+GPUS=0,1,2,3 bash ViT5/train.sh config=cifar100_base
+```
+
+### ImageNet-1k via Hugging Face
+
+When `data_dir` does not contain `train/` and `val/` sub-directories the
+dataset is downloaded from Hugging Face automatically.
+
+```bash
+# Accept the licence at https://huggingface.co/datasets/imagenet-1k first.
+export HF_TOKEN=hf_...
+python ViT5/base_train.py config=imagenet1k_base data_dir=ViT5/data/imagenet1k
+```
+
+Subsequent runs reuse the local cache.
+
+### Local ImageNet in ImageFolder layout
 
 ```bash
 python ViT5/base_train.py config=imagenet1k_base data_dir=/path/to/imagenet
 ```
 
-ImageNet should be in `ImageFolder` layout (`train/` and `val/` sub-folders).
-HuggingFace streaming (`imagenet_hf`) is also supported if a local copy is not
-available — see `ViT5/src/data_utils.py`.
-
-### Multi-GPU (torchrun)
-
-```bash
-bash ViT5/train.sh config=imagenet1k_base data_dir=/data/imagenet
-# or set GPUS explicitly:
-GPUS=0,1,2,3 bash ViT5/train.sh config=cifar100_base
-```
-
-### Override individual fields
-
-```bash
-python ViT5/base_train.py config=cifar100_base --lr 1e-3 max_iters=20000
-```
-
 ---
 
-## Config presets
+## Post-Training Analysis
 
-| Key                 | Dataset      | img_size | patch | Sequence length | Notes                       |
-|---------------------|-------------|----------|-------|-----------------|-----------------------------|
-| `default`           | CIFAR-100   | 32       | 4     | 69 (64+1+4)     | Base TrainConfig            |
-| `cifar100_base`     | CIFAR-100   | 32       | 4     | 69              | 50 k iters, lr=3e-3         |
-| `imagenet1k_base`   | ImageNet-1k | 192      | 16    | 149 (144+1+4)   | 50 k iters, lr=3e-3         |
+`plot_history.py` replays a saved `history.pkl` and writes all figures plus
+a structured analysis report.
 
-Sequence length = patches + CLS token + 4 register tokens.
+```bash
+python ViT5/plot_history.py outputs/cifar100_base/history.pkl
+```
+
+Outputs written next to the pickle:
+
+| File | Contents |
+|---|---|
+| `*_curvature_smoothed_comparison.png` | Smoothed proxy traces (λ = 10) |
+| `*_training_dynamics.png` | Loss, accuracy, LR schedule |
+| `analysis.txt` | Full correlation report (plain text) |
+| `analysis.md` | Markdown tables: raw/smoothed correlations, spike co-occurrence |
+
+Override the smoothing strength: `python ViT5/plot_history.py history.pkl --lam 20`
 
 ---
 

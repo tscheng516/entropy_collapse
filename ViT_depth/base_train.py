@@ -213,6 +213,8 @@ else:
         run_id = time.strftime("%Y%m%d-%H%M%S")
         run_out_dir = os.path.join(cfg.out_dir, run_id)
         os.makedirs(run_out_dir, exist_ok=True)
+    if not cfg.wandb_run_name or cfg.wandb_run_name == "run":
+        cfg.wandb_run_name = run_id
 
 if rank == 0:
     print(f"[io] outputs → {run_out_dir}")
