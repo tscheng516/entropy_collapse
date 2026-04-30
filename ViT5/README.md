@@ -13,15 +13,17 @@ and layer-scale.  Only the Base variant (~87 M parameters) is included here.
 
 ```bash
 # venv
+cd ViT5/
 python3.10 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
-pip install -r ViT5/requirements.txt
+pip install -r requirements.txt
 ```
 
 ```bash
 # Conda
+cd ViT5/
 conda create -n entropy-vit5 python=3.10 -y && conda activate entropy-vit5
-pip install -r ViT5/requirements.txt
+pip install -r requirements.txt
 ```
 
 > **CUDA variants** — `requirements.txt` pins `torch==2.4.1` for CUDA 12.1.
@@ -29,7 +31,7 @@ pip install -r ViT5/requirements.txt
 > ```bash
 > # CUDA 11.8 example
 > pip install torch==2.4.1 torchvision --index-url https://download.pytorch.org/whl/cu118
-> pip install -r ViT5/requirements.txt --no-deps   # torch already installed
+> pip install -r requirements.txt --no-deps   # torch already installed
 > ```
 
 > **Why timm 0.4.12?**  ViT-5's model code imports
@@ -50,7 +52,7 @@ The default config runs with `flash=False` to keep Hessian computation stable.
 ### 3. Train (default: ViT-5-Base on CIFAR-100)
 
 ```bash
-python ViT5/base_train.py
+python base_train.py
 ```
 
 CIFAR-100 is downloaded automatically on first run.
@@ -71,8 +73,8 @@ Each preset is a `@dataclass` defined in `configs/train_config.py`.
 Sequence length = patches + CLS token + 4 register tokens.
 
 ```bash
-python ViT5/base_train.py config=imagenet1k_base
-bash  ViT5/train.sh        config=cifar100_base   # multi-GPU via torchrun
+python base_train.py config=imagenet1k_base
+bash  train.sh        config=cifar100_base   # multi-GPU via torchrun
 ```
 
 ---
@@ -84,7 +86,7 @@ bash  ViT5/train.sh        config=cifar100_base   # multi-GPU via torchrun
 Any `TrainConfig` field can be overridden on the command line after the preset:
 
 ```bash
-python ViT5/base_train.py config=cifar100_base \
+python base_train.py config=cifar100_base \
     learning_rate=1e-3 \
     max_iters=50000 \
     hessian_intv=500 \
@@ -98,7 +100,7 @@ python ViT5/base_train.py config=cifar100_base \
 `train.sh` wraps `torchrun`. Set `GPUS` to select devices:
 
 ```bash
-GPUS=0,1,2,3 bash ViT5/train.sh config=cifar100_base
+GPUS=0,1,2,3 bash train.sh config=cifar100_base
 ```
 
 ### ImageNet-1k via Hugging Face
@@ -109,7 +111,7 @@ dataset is downloaded from Hugging Face automatically.
 ```bash
 # Accept the licence at https://huggingface.co/datasets/imagenet-1k first.
 export HF_TOKEN=hf_...
-python ViT5/base_train.py config=imagenet1k_base data_dir=ViT5/data/imagenet1k
+python base_train.py config=imagenet1k_base data_dir=data/imagenet1k
 ```
 
 Subsequent runs reuse the local cache.
@@ -117,7 +119,7 @@ Subsequent runs reuse the local cache.
 ### Local ImageNet in ImageFolder layout
 
 ```bash
-python ViT5/base_train.py config=imagenet1k_base data_dir=/path/to/imagenet
+python base_train.py config=imagenet1k_base data_dir=/path/to/imagenet
 ```
 
 ---
@@ -128,7 +130,7 @@ python ViT5/base_train.py config=imagenet1k_base data_dir=/path/to/imagenet
 a structured analysis report.
 
 ```bash
-python ViT5/plot_history.py outputs/cifar100_base/history.pkl
+python plot_history.py outputs/cifar100_base/history.pkl
 ```
 
 Outputs written next to the pickle:
@@ -140,7 +142,7 @@ Outputs written next to the pickle:
 | `analysis.txt` | Full correlation report (plain text) |
 | `analysis.md` | Markdown tables: raw/smoothed correlations, spike co-occurrence |
 
-Override the smoothing strength: `python ViT5/plot_history.py history.pkl --lam 20`
+Override the smoothing strength: `python plot_history.py history.pkl --lam 20`
 
 ---
 
@@ -165,7 +167,7 @@ Override the smoothing strength: `python ViT5/plot_history.py history.pkl --lam 
 
 ## Differences from `ViT/`
 
-| Aspect             | `ViT/`                          | `ViT5/`                          |
+| Aspect             | `ViT/`                          | ``                          |
 |--------------------|----------------------------------|-----------------------------------|
 | Model              | timm ViT (various sizes)        | ViT-5-Base (fixed)                |
 | Norm               | LayerNorm                        | RMSNorm                           |
@@ -182,7 +184,7 @@ Override the smoothing strength: `python ViT5/plot_history.py history.pkl --lam 
 
 ## Shared data cache
 
-Both `ViT/` and `ViT5/` use `data_dir="./data"` as the default root for
+Both `ViT/` and `` use `data_dir="./data"` as the default root for
 torchvision downloads.  When both training scripts are run from the repository
 root, they share the same CIFAR-100 download without duplicating it.
 

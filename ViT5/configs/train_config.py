@@ -145,7 +145,7 @@ class TrainConfig:
     # Temperature-shift intervention
     # ------------------------------------------------------------------ #
     temp_shift_step: int = -1
-    temp_shift_factor: float = 2.0
+    temp_shift_factor: float = 0.25
 
     # ------------------------------------------------------------------ #
     # Compute / device
@@ -222,7 +222,7 @@ class ViT5BaseCIFAR100Config(TrainConfig):
     # ----- Output -----
     out_dir: str = "out/cifar100/vit5b16"
     wandb_project: str = "entropy-collapse-cifar100"
-    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
+    wandb_run_name: str = time.strftime("ViT5_%Y%m%d-%H%M%S")
 
 
 @dataclass
@@ -278,7 +278,7 @@ class ViT5BaseImageNet1kConfig(TrainConfig):
     # ----- Output -----
     out_dir: str = "out/imagenet1k/vit5b16"
     wandb_project: str = "entropy-collapse-imagenet1k"
-    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
+    wandb_run_name: str = time.strftime("ViT5_%Y%m%d-%H%M%S")
 
 
 # Registry — add entries here to expose new presets to the CLI.

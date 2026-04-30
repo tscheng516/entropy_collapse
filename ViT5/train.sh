@@ -24,7 +24,7 @@ export MKL_NUM_THREADS=1
 
 # Activate conda
 eval "$(conda shell.bash hook)"
-conda activate entropy-collapse-vit5
+conda activate entropy-vit5
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
