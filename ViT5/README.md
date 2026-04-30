@@ -29,14 +29,17 @@ python -c "import torch; print('PyTorch:', torch.__version__, \
     '| GPU available:', torch.cuda.is_available())"
 ```
 
-Match the `nvidia-smi` CUDA version to the correct wheel tag:
+Match the `nvidia-smi` CUDA version to the correct wheel tag **for `torch==2.4.1`**:
 
-| `nvidia-smi` CUDA Version | Recommended wheel tag | `--index-url` suffix |
+| `nvidia-smi` CUDA Version | Wheel tag to use | Why |
 |---|---|---|
-| 11.8 | `cu118` | `/whl/cu118` |
-| 12.1 | `cu121` | `/whl/cu121` |
-| 12.4 | `cu124` | `/whl/cu124` |
-| ≥ 12.6 | `cu126` | `/whl/cu126` |
+| 11.8 | `cu118` | Native build |
+| 12.1 – 13.x (incl. 13.0) | `cu121` | `torch==2.4.1` has **no** `cu124`/`cu126`/`cu130` wheels; use `cu121` — CUDA drivers are backward compatible |
+
+> **`torch==2.4.1` wheel availability**: this release only ships `cu118` and
+> `cu121` builds.  Attempting `--index-url .../cu124`, `cu126`, or `cu130`
+> will produce `ERROR: Could not find a version that satisfies the requirement
+> torch==2.4.1`.  Always use `cu121` for any CUDA 12.x or 13.x driver.
 
 > If `nvidia-smi` is not found, the server may have no GPU or the NVIDIA driver
 > is not installed — use the CPU-only PyTorch wheel (no `--index-url` needed).
@@ -60,9 +63,12 @@ conda create -n entropy-vit5 python=3.10 -y && conda activate entropy-vit5
 pip install -r requirements.txt
 ```
 
-> **CUDA variants** — `requirements.txt` pins `torch==2.4.1`.  The default
-> PyPI wheel is CUDA 12.1.  For other CUDA versions install PyTorch first from
-> the matching index URL, then install the remaining dependencies:
+> **CUDA variants** — `requirements.txt` pins `torch==2.4.1`, which only has
+> `cu118` and `cu121` wheels.  There are **no** `cu124`, `cu126`, or `cu130`
+> builds for this version — requesting them will raise a "Could not find a
+> version" error.  For any CUDA 12.x or 13.x driver, use the `cu121` wheel:
+> CUDA drivers are backward compatible, so a CUDA 13.0 driver runs `cu121`
+> compiled code without issue.
 >
 > ```bash
 > # CUDA 11.8
@@ -70,14 +76,9 @@ pip install -r requirements.txt
 >     --index-url https://download.pytorch.org/whl/cu118
 > pip install -r requirements.txt
 >
-> # CUDA 12.1 (default)
+> # CUDA 12.1 / 12.4 / 12.6 / 13.x  — all use cu121
 > pip install torch==2.4.1 torchvision==0.19.1 \
 >     --index-url https://download.pytorch.org/whl/cu121
-> pip install -r requirements.txt
->
-> # CUDA 12.4
-> pip install torch==2.4.1 torchvision==0.19.1 \
->     --index-url https://download.pytorch.org/whl/cu124
 > pip install -r requirements.txt
 > ```
 >
@@ -109,7 +110,20 @@ pip install -r requirements.txt
 > `timm.models.layers.{DropPath,trunc_normal_}`, which were removed in later
 > timm versions.
 
-### 3. (Optional) Flash Attention
+### 3. Verify the install
+
+```bash
+python -c "import torch; print('PyTorch:', torch.__version__, \
+    '| CUDA build:', torch.version.cuda, \
+    '| GPU available:', torch.cuda.is_available())"
+```
+
+Expected output (CUDA 12.x / 13.x):
+```
+PyTorch: 2.4.1+cu121 | CUDA build: 12.1 | GPU available: True
+```
+
+### 4. (Optional) Flash Attention
 
 For faster training on Ampere+ GPUs:
 
@@ -257,6 +271,51 @@ Override the smoothing strength: `python plot_history.py history.pkl --lam 20`
 Both `ViT/` and `ViT5/` use `data_dir="./data"` as the default root for
 torchvision downloads.  When both training scripts are run from the repository
 root, they share the same CIFAR-100 download without duplicating it.
+
+---
+
+## Troubleshooting
+
+### `ImportError: libnvJitLink.so.12: cannot open shared object file`
+
+This happens with `torch==2.4.1+cu121` on servers where the full CUDA 12
+toolkit is not installed system-wide.  The PyTorch wheel does not bundle
+`libnvJitLink.so.12`, and it is not pulled in automatically.
+
+Try the fixes below in order:
+
+**1. Check if the library already exists on the system** (most servers have it):
+```bash
+find /usr/local/cuda* /usr/lib/x86_64-linux-gnu -name "libnvJitLink.so.12" 2>/dev/null
+ldconfig -p | grep nvJitLink
+```
+If found, add its directory to `LD_LIBRARY_PATH`:
+```bash
+export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH  # adjust path
+# Add to ~/.bashrc or the top of train.sh to make it permanent
+```
+
+**2. Conda (recommended if using a conda env)**:
+```bash
+conda install -y -c nvidia cuda-nvjitlink
+```
+
+**3. pip via NVIDIA's package index** (standard PyPI may not carry this package on all platforms):
+```bash
+pip install nvidia-cuda-nvjitlink-cu12 \
+    --extra-index-url https://pypi.nvidia.com
+```
+
+**4. Switch to the cu118 wheel** (avoids the issue entirely — cu118 does not
+need `libnvJitLink`).  Only viable if your driver supports CUDA ≥ 11.8:
+```bash
+pip install torch==2.4.1 torchvision==0.19.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+```
+
+> Note: this error does **not** occur with the `cu118` wheel.  If none of the
+> above fixes work on your server, switching to `cu118` is the most portable
+> option — the CUDA 11.8 runtime is fully self-contained in the wheel.
 
 ---
 
