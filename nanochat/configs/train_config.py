@@ -64,10 +64,10 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Model — nanochat GPTConfig fields
     # ------------------------------------------------------------------ #
-    n_layer: int = 12
-    n_head: int = 6               # query heads
-    n_kv_head: int = 6            # key/value heads (GQA; set < n_head for MQA)
-    n_embd: int = 768
+    n_layer: int = 6
+    n_head: int = 3               # query heads
+    n_kv_head: int = 3            # key/value heads (GQA; set < n_head for MQA)
+    n_embd: int = 384
     sequence_len: int = 512
     # Keep sequence_len short (512) for research runs; set to 2048 for
     # full-context pre-training.  Hessian memory scales O(B·T²) per layer.
