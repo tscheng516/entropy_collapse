@@ -171,8 +171,8 @@ def get_curvature_metrics(
     # belt-and-suspenders only.)
     # ------------------------------------------------------------------ #
     _sdp_ctx = (
-        torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
+        torch.nn.attention.sdpa_kernel(
+            torch.nn.attention.SDPBackend.MATH
         )
         if Xc.is_cuda
         else nullcontext()

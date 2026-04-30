@@ -224,6 +224,7 @@ if _nc_dtype == torch.bfloat16 and cfg.optimizer.lower() == "muon_adamw":
 # ---------------------------------------------------------------------------
 # 3.  Reproducibility & device
 # ---------------------------------------------------------------------------
+torch.set_float32_matmul_precision("high")  # enable TF32 on Ampere+
 torch.manual_seed(cfg.seed)
 np.random.seed(cfg.seed)
 

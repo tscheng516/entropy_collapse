@@ -183,8 +183,8 @@ def get_curvature_metrics(
     flat_params  = torch.cat([p.reshape(-1) for p in params_vals])
 
     _sdp_ctx = (
-        torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
+        torch.nn.attention.sdpa_kernel(
+            torch.nn.attention.SDPBackend.MATH
         )
         if Xc.is_cuda
         else nullcontext()

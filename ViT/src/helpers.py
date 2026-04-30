@@ -230,8 +230,8 @@ def get_curvature_metrics(
     # traverse the explicit softmax graph in _patched_attn_forward.
     # ------------------------------------------------------------------ #
     _sdp_ctx = (
-        torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
+        torch.nn.attention.sdpa_kernel(
+            torch.nn.attention.SDPBackend.MATH
         )
         if Xc.is_cuda
         else nullcontext()

@@ -581,8 +581,8 @@ for iter_num in range(iter_num, cfg.max_iters):
     if iter_num % cfg.hessian_freq == 0:
         _raw_model.train()
         optimizer.zero_grad()
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
+        with torch.nn.attention.sdpa_kernel(
+            torch.nn.attention.SDPBackend.MATH
         ) if device != "cpu" else nullcontext():
             pred_h = _raw_model(X)
             loss_for_hess = scale_invariant_log_loss(
