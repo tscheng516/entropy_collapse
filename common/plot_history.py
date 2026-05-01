@@ -445,11 +445,11 @@ def build_arg_parser(description: str = "Re-run post-training analysis from hist
         help="Output directory (default: same dir as pkl_path)",
     )
     parser.add_argument(
-        "--hessian_intv", type=int, default=500,
+        "--hessian_intv", type=int, default=50,
         help="Hessian computation frequency used during training (default: 500)",
     )
     parser.add_argument(
-        "--entropy_intv", type=int, default=500,
+        "--entropy_intv", type=int, default=50,
         help="Entropy computation frequency used during training (default: 500)",
     )
     parser.add_argument(
