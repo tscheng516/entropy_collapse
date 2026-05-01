@@ -1,7 +1,7 @@
 """
 plot_history.py — Re-run all post-training plots and analysis from a saved
 history.pkl file.
-Depreciated, base_train.py uses common/plot_histoy.py version instead.
+Deprecated, base_train.py uses common/plot_histoy.py version instead.
 
 Usage
 -----

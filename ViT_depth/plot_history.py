@@ -1,7 +1,7 @@
 """
 plot_history.py — Re-run all post-training plots and analysis from a saved
 history.pkl file produced by ``depth/base_train.py``.
-Depreciated, base_train.py uses common/plot_histoy.py version instead.
+Deprecated, base_train.py uses common/plot_histoy.py version instead.
 
 Mirrors ``ViT/plot_history.py`` with depth-specific metrics:
   * Training dynamics: SILog loss, RMSE (log), δ<1.25, attention entropy.
