@@ -1,157 +1,136 @@
-# Entropy Collapse — Loss Landscape Sharpness Validation
+# Entropy Collapse
 
-This repository validates loss landscape sharpness (via the spectral norm
-of the Hessian and its proxies) and confirms that the proxies track each
-other closely. 
+This repository investigates the relationship between **attention entropy collapse** and **loss landscape sharpness** across three model families: image classification ViTs, monocular depth estimation ViTs, and a GPT-style language model.  Each experiment tracks a suite of nine second-order curvature proxies alongside per-layer attention entropy throughout training, enabling correlation and spike co-occurrence analysis between the two phenomena.
 
 ---
 
-## Repository Layout
+## Research Questions
+
+- Does loss landscape sharpness (λ_max of the Hessian and its proxies) co-vary with attention entropy collapse?
+- Do different curvature proxies — exact HVP, Gauss-Newton, empirical Fisher, K-FAC, finite differences — agree with each other in trend and spike timing?
+- Is the relationship consistent across tasks (classification, depth estimation, language modelling) and architectures (ViT, GPT)?
+
+---
+
+## Repository Structure
 
 ```
 entropy_collapse/
-├── LLM/                          # NanoGPT entropy-collapse experiments
-│   ├── base_train.py             # Main training + checkpointing entry-point
-│   ├── configs/
-│   │   └── train_config.py       # All experiment flags (LR, init, wandb, …)
+│
+├── common/                       # Shared, model-agnostic utilities
+│   ├── helpers.py                # Curvature metrics (CE-loss variant), attention
+│   │                             #   entropy, VV-subspace mask, smoothing
+│   ├── plotting.py               # Training-dynamics plots, spike detection,
+│   │                             #   Spearman/Pearson correlation helpers
+│   ├── plot_history.py           # CLI + API: re-run all post-training plots
+│   │                             #   from a saved history.pkl (task-aware)
+│   └── __init__.py
+│
+├── ViT/                          # Image classification (CIFAR-10/100, ImageNet)
+│   ├── base_train.py             # Training entry-point
+│   ├── plot_history.py           # Thin CLI wrapper → common/plot_history.py
+│   ├── configs/train_config.py   # All experiment flags
 │   ├── src/
-│   │   ├── helpers.py            # Curvature helpers & attention entropy
-│   │   ├── model.py              # HookedGPT — NanoGPT with attention caching
-│   │   ├── data_utils.py         # Data loading & batch sampling
-│   │   └── plotting.py           # Training-dynamics plot, MAD spike detection,
-│   │                             #   and Spearman/Pearson correlation helpers
-│   ├── notebook.ipynb            # Original exploratory notebook
-│   ├── requirements.txt          # LLM-specific dependencies (Python 3.10/3.11)
-│   └── README.md                 # LLM setup and usage
-├── ViT/                          # Vision Transformer experiments
-│   ├── base_train.py             # Main training + checkpointing entry-point
-│   ├── configs/
-│   │   └── train_config.py       # All experiment flags (qk_norm, dataset, …)
-│   ├── src/
-│   │   ├── helpers.py            # Curvature helpers & attention entropy
 │   │   ├── model.py              # HookedViT — timm ViT with attention caching
-│   │   ├── data_utils.py         # CIFAR-10/100 / ImageNet data loaders
-│   │   └── plotting.py           # Training-dynamics plot, MAD spike detection,
-│   │                             #   and Spearman/Pearson correlation helpers
-│   ├── requirements.txt          # ViT-specific dependencies (Python 3.10)
-│   └── README.md                 # ViT setup and usage
+│   │   ├── data_utils.py         # CIFAR / ImageNet data loaders
+│   │   ├── helpers.py            # Local re-exports + path bootstrap
+│   │   └── plotting.py           # Local re-exports + path bootstrap
+│   ├── requirements.txt
+│   └── README.md
+│
+├── ViT5/                         # Ablation variant of ViT (RoPE, alt. configs)
+│   ├── base_train.py
+│   ├── plot_history.py
+│   ├── configs/train_config.py
+│   ├── src/
+│   │   ├── model.py              # HookedViT variant with RoPE / additional options
+│   │   ├── data_utils.py
+│   │   ├── helpers.py
+│   │   ├── plotting.py
+│   │   └── rope.py               # Rotary position embedding utilities
+│   ├── requirements.txt
+│   └── README.md
+│
+├── ViT_depth/                    # Monocular depth estimation (SILog loss)
+│   ├── base_train.py
+│   ├── plot_history.py
+│   ├── configs/train_config.py
+│   ├── src/
+│   │   ├── model.py              # HookedViTDepth
+│   │   ├── data_utils.py
+│   │   ├── helpers.py            # SILog loss + depth-specific curvature metrics
+│   │   └── plotting.py
+│   ├── requirements.txt
+│   └── README.md
+│
+├── nanochat/                     # GPT-style language model (nanochat)
+│   ├── base_train.py
+│   ├── plot_history.py
+│   ├── configs/train_config.py
+│   ├── src/
+│   │   ├── model.py              # HookedGPT with attention caching
+│   │   ├── helpers.py            # LM-specific curvature metrics (reshape logits)
+│   │   └── plotting.py
+│   ├── requirements.txt
+│   └── README.md
+│
+├── nanoGPT/                      # Reference NanoGPT experiments (exploratory)
+│   ├── base_train.py
+│   ├── plot_history.py
+│   ├── configs/train_config.py
+│   ├── src/
+│   │   ├── model.py
+│   │   ├── data_utils.py
+│   │   ├── helpers.py
+│   │   ├── plotting.py
+│   │   └── tokenizer.py
+│   ├── notebook/
+│   └── README.md
+│
 └── README.md                     # This file
 ```
 
 ---
 
-## Environment Setup
+## Code Organisation Logic
 
-The two experiment families have different Python and `timm` version
-requirements, so each has its own `requirements.txt`.  See the dedicated
-READMEs for full instructions:
+The codebase is split into a **shared `common/` layer** and **per-experiment `src/` layers**.
 
-- **LLM / NanoGPT** — [`LLM/README.md`](LLM/README.md)  (Python 3.10 or 3.11)
-- **ViT** — [`ViT/README.md`](ViT/README.md)  (Python 3.10, mirrors
-  [apple/ml-sigma-reparam](https://github.com/apple/ml-sigma-reparam/blob/main/vision/environment.yaml))
+### `common/` — model-agnostic code
 
-### LLM quick setup (venv, CPU/MPS)
-Please refer to the [.md](LLM/README.md).
+Everything that does not depend on the specific task, loss function, or architecture lives here so it is written and maintained once.
 
-### ViT quick setup (venv, CPU/MPS)
-Please refer to the [.md](ViT/README.md).
+| Module | Contents |
+|--------|----------|
+| `common/helpers.py` | `get_curvature_metrics` (CE / classification variant with all nine proxies), `get_attention_entropy` (arch-aware: detects `model.blocks` vs `model.transformer.h`), `get_VV_subspace_mask` (detects fused-QKV vs separate c_v), `smooth_log_trend` |
+| `common/plotting.py` | `plot_training_dynamics`, `plot_curvature_smoothed_comparison`, `plot_all_spike_cooccurrences`, `print_correlations` — all dispatch on a `task=` argument for task-specific axis labels |
+| `common/plot_history.py` | `plot_history(pkl_path, ..., task=)` — loads a `history.pkl` and reproduces every post-training figure and the `analysis.md` report; `build_arg_parser()` for per-folder CLI wrappers |
 
-### NanoGPT data preparation (LLM only)
+### Per-experiment `src/helpers.py` — task-specific overrides
 
-```bash
-git clone https://github.com/karpathy/nanoGPT.git LLM/nanoGPT
-cd LLM/nanoGPT
-python data/shakespeare_char/prepare.py
-cd ../..
-```
+Each experiment folder's `src/helpers.py` contains only what cannot be shared:
 
-### Smoke-test both experiment entry points
+| Folder | What stays local | Why |
+|--------|-----------------|-----|
+| `ViT/` | path bootstrap, re-exports from `common` | fully delegates to common |
+| `ViT5/` | path bootstrap, re-exports from `common` | identical loss and architecture family as ViT |
+| `ViT_depth/` | `scale_invariant_log_loss`, `get_curvature_metrics` | depth uses SILog loss; curvature function takes a pre-computed loss tensor |
+| `nanochat/` | `get_curvature_metrics` | LM logits are `(B, T, vocab)` and must be reshaped before CE |
 
-```bash
-python LLM/base_train.py --max_it 2 --hessian_freq 1 --entropy_freq 1 data_dir=LLM/nanoGPT/data/shakespeare_char
-python ViT/base_train.py --max_it 2 --hessian_intv 1 --entropy_intv 1
-```
+`get_VV_subspace_mask` and `get_attention_entropy` are always sourced from `common/helpers.py` — both functions auto-detect the architecture from parameter names and module structure.
 
-## Quick Start (LLM / NanoGPT)
+### Per-experiment `plot_history.py` — thin CLI wrappers
 
-### 1. Train with default config
+Each folder's `plot_history.py` is a minimal CLI script that parses arguments and calls `common.plot_history.plot_history(..., task=<task>)`.  All plotting logic lives in `common/`.
 
-```bash
-python LLM/base_train.py data_dir=LLM/nanoGPT/data/shakespeare_char
-```
+---
 
-### 2. Override flags from the command line
+## Per-experiment READMEs
 
-```bash
-python LLM/base_train.py \
-        data_dir=LLM/nanoGPT/data/shakespeare_char \
-        --lr 5e-4 \
-        --optim adamw \
-        --max_it 2000 \
-        hessian_freq=5 \
-        entropy_freq=10 \
-        --wandb true \
-        wandb_run_name=small-lr-run
-```
+Installation, data preparation, training commands, and result descriptions are documented in each experiment's own README:
 
-### 3. Resume from a checkpoint
-
-```bash
-python LLM/base_train.py --cp resume out_dir=out
-```
-
-## Quick Start (ViT)
-
-### 1. Train with default config (CIFAR-10)
-
-```bash
-python ViT/base_train.py
-```
-
-### 2. Train on CIFAR-100
-
-No manual download is needed; `torchvision` auto-downloads CIFAR-100.
-
-```bash
-python ViT/base_train.py \
-    dataset=cifar100 \
-    data_dir=ViT/data/cifar100 \
-    num_classes=100 \
-    --optim adamw \
-    --lr 1e-3 \
-    --max_it 5000
-```
-
-### 3. Train on ImageNet-1k directly from Hugging Face
-
-No manual export script is required. The loader can pull
-`imagenet-1k` directly via the `datasets` package.
-
-```bash
-python ViT/base_train.py \
-    dataset=imagenet_hf \
-    data_dir=ViT/data/imagenet1k_hf \
-    num_classes=1000 \
-    --optim adamw \
-    --lr 1e-3 \
-    --max_it 5000
-```
-
-If you already have local ImageNet in ImageFolder layout, use:
-
-```bash
-python ViT/base_train.py dataset=imagenet data_dir=/path/to/imagenet num_classes=1000
-```
-
-### 4. Override core flags
-
-```bash
-python ViT/base_train.py \
-    --optim adamw \
-    --lr 1e-3 \
-    --max_it 5000 \
-    hessian_intv=5 \
-    entropy_intv=10 \
-    --wandb true \
-    wandb_run_name=vit-cifar10-run
-```
+- [ViT/README.md](ViT/README.md) — image classification
+- [ViT5/README.md](ViT5/README.md) — ViT ablation with RoPE
+- [ViT_depth/README.md](ViT_depth/README.md) — monocular depth estimation
+- [nanochat/README.md](nanochat/README.md) — GPT language model
+- [nanoGPT/README.md](nanoGPT/README.md) — reference NanoGPT experiments
