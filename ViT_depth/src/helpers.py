@@ -21,11 +21,26 @@ loss needs to be recomputed internally (GN, Fisher, BFGS, FD).
 
 from __future__ import annotations
 
+import os
+import sys
+
+# ---------------------------------------------------------------------------
+# Path bootstrap — add project root so ``from common.helpers import ...``
+# resolves regardless of the working directory.
+# ---------------------------------------------------------------------------
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_FOLDER_DIR = os.path.dirname(_SRC_DIR)
+_PROJECT_ROOT = os.path.dirname(_FOLDER_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.func import functional_call
 from torch.autograd import functional as autograd_functional
+
+from common.helpers import smooth_log_trend, get_VV_subspace_mask  # noqa: F401
 
 
 # ======================================================================
@@ -113,78 +128,11 @@ def scale_invariant_log_loss_per_sample(
 
 
 # ======================================================================
-# Smooth log-trend extraction  (identical to ViT/src/helpers.py)
+# Smooth log-trend extraction  (delegated to common.helpers)
 # ======================================================================
-
-
-def _second_difference_matrix(n: int) -> np.ndarray:
-    if n < 3:
-        return np.zeros((0, n), dtype=np.float64)
-    D = np.zeros((n - 2, n), dtype=np.float64)
-    for i in range(n - 2):
-        D[i, i : i + 3] = [1.0, -2.0, 1.0]
-    return D
-
-
-def smooth_log_trend(
-    y: np.ndarray | list,
-    lam: float = 10.0,
-    eps: float = 1e-12,
-    use_abs: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Extract a smooth trend via regularised least-squares in log-space.
-
-    Identical to ``ViT/src/helpers.py:smooth_log_trend``.
-    """
-    y = np.asarray(y, dtype=np.float64)
-    y_safe = np.abs(y) + eps if use_abs else np.maximum(y, eps)
-    log_y = np.log(y_safe)
-    n = len(log_y)
-    if n < 3:
-        return y_safe.copy(), log_y.copy(), log_y.copy()
-    D = _second_difference_matrix(n)
-    A = np.eye(n, dtype=np.float64) + lam * (D.T @ D)
-    trend_log = np.linalg.solve(A, log_y)
-    trend_raw = np.exp(trend_log)
-    return trend_raw, trend_log, log_y
-
-
-# ======================================================================
-# Value-subspace mask  (identical to ViT/src/helpers.py)
-# ======================================================================
-
-
-def get_VV_subspace_mask(model: torch.nn.Module) -> torch.Tensor:
-    """
-    Build a flat binary mask selecting only value-projection parameters.
-
-    Works with ``HookedViTDepth`` since timm fuses Q, K, V into a single
-    ``attn.qkv`` linear.  The backbone parameter names end with
-    ``.attn.qkv.weight`` / ``.attn.qkv.bias`` regardless of whether the
-    model is wrapped in ``HookedViTDepth``.
-
-    Args:
-        model: A ``HookedViTDepth`` instance.
-
-    Returns:
-        1-D float tensor on CPU, same length as the flattened parameter vector.
-    """
-    mask_parts = []
-    for name, param in model.named_parameters():
-        if name.endswith(".attn.qkv.weight"):
-            m = torch.zeros_like(param)
-            d = param.size(0) // 3
-            m[2 * d :, :] = 1.0
-            mask_parts.append(m.reshape(-1))
-        elif name.endswith(".attn.qkv.bias"):
-            m = torch.zeros_like(param)
-            d = param.size(0) // 3
-            m[2 * d :] = 1.0
-            mask_parts.append(m.reshape(-1))
-        else:
-            mask_parts.append(torch.zeros_like(param).reshape(-1))
-    return torch.cat(mask_parts)
+# smooth_log_trend and get_VV_subspace_mask are imported from
+# common.helpers above; get_VV_subspace_mask auto-detects the timm ViT
+# fused-qkv architecture used by ViT_depth.
 
 
 # ======================================================================

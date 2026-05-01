@@ -465,7 +465,7 @@ if cfg.wandb_log:
 #     fisher    — λ_max(F)               empirical Fisher
 #     kfac      — max λ_max(A)·λ_max(G)  K-FAC Kronecker proxy
 # ---------------------------------------------------------------------------
-from src.helpers import (
+from common.helpers import (
     get_VV_subspace_mask,
     get_curvature_metrics,
     get_attention_entropy,
@@ -736,6 +736,8 @@ for iter_num in range(iter_num, cfg.max_iters):
 _save_checkpoint("final_ckpt")
 
 if not use_ddp or rank == 0:
+    import dataclasses
+    history["config"] = dataclasses.asdict(cfg)
     history_path = os.path.join(run_out_dir, "history.pkl")
     with open(history_path, "wb") as f:
         pickle.dump(history, f)
@@ -748,7 +750,7 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from plot_history import plot_history
+    from common.plot_history import plot_history
 
     plot_history(
         pkl_path=history_path,

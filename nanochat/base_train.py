@@ -504,10 +504,12 @@ if cfg.wandb_log:
 # ---------------------------------------------------------------------------
 # 9.  Curvature and entropy helpers
 # ---------------------------------------------------------------------------
-from src.helpers import (  # noqa: E402
+from common.helpers import (  # noqa: E402
     get_VV_subspace_mask,
-    get_curvature_metrics,
     get_attention_entropy,
+)
+from src.helpers import (  # noqa: E402
+    get_curvature_metrics,
 )
 
 _raw_model = model.module if use_ddp else model
@@ -751,6 +753,8 @@ for iter_num in range(iter_num, cfg.max_iters):
 _save_checkpoint("final_ckpt")
 
 if not use_ddp or rank == 0:
+    import dataclasses
+    history["config"] = dataclasses.asdict(cfg)
     history_path = os.path.join(run_out_dir, "history.pkl")
     with open(history_path, "wb") as f:
         pickle.dump(history, f)
@@ -763,7 +767,7 @@ if not use_ddp or rank == 0:
 # 12.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from plot_history import plot_history  # noqa: E402
+    from common.plot_history import plot_history  # noqa: E402
 
     plot_history(
         pkl_path=history_path,
@@ -773,6 +777,7 @@ if not use_ddp or rank == 0:
         skip_intv=True,
         lam=10.0,
         compute_fd=cfg.compute_fd,
+        task="lm",
     )
 
 # ---------------------------------------------------------------------------

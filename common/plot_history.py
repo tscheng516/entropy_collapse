@@ -2,24 +2,30 @@
 plot_history.py — Re-run all post-training plots and analysis from a saved
 history.pkl file.
 
-Usage
------
-Basic (output goes next to the .pkl file)::
+Shared by ViT/, ViT5/, ViT_depth/, and nanochat/.  Each folder's
+``plot_history.py`` is a thin CLI wrapper that imports ``plot_history()``
+from here with the correct ``task=`` argument.
 
-    python plot_history.py path/to/history.pkl
+Usage (from the relevant sub-folder wrapper)
+---------------------------------------------
+Basic::
+
+    python ViT/plot_history.py          path/to/history.pkl
+    python ViT_depth/plot_history.py    path/to/history.pkl
+    python nanochat/plot_history.py     path/to/history.pkl
 
 Custom output directory::
 
-    python plot_history.py path/to/history.pkl -o reanalysis/
+    python ViT/plot_history.py path/to/history.pkl -o reanalysis/
 
 Override frequencies (default 500)::
 
-    python plot_history.py out/nanochat/d12/.../history.pkl \\
-        --hessian_intv 500 --entropy_intv 100
+    python ViT/plot_history.py out/cifar100_vitb16/.../history.pkl \\
+        --hessian_intv 100 --entropy_intv 100
 
 Legacy carry-forward mode::
 
-    python plot_history.py path/to/history.pkl --no-skip-intv
+    python ViT/plot_history.py path/to/history.pkl --no-skip-intv
 """
 
 from __future__ import annotations
@@ -35,18 +41,26 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
-# Path setup — mirror base_train.py so ``src`` sub-package resolves.
+# Path bootstrap — ensure the project root is on sys.path so that
+# ``from common.plotting import ...`` resolves when this module is imported
+# from any sub-project directory.
 # ---------------------------------------------------------------------------
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if _SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPT_DIR)
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_THIS_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-from src.plotting import (  # noqa: E402
+from common.plotting import (  # noqa: E402
     plot_training_dynamics,
     plot_all_spike_cooccurrences,
     plot_curvature_smoothed_comparison,
     print_correlations,
 )
+
+
+# ======================================================================
+# I/O helpers
+# ======================================================================
 
 
 class _Tee:
@@ -67,19 +81,19 @@ class _Tee:
         return self._buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Markdown helpers
-# ---------------------------------------------------------------------------
-
 def _md_table(headers: list[str], rows: list[list[str]]) -> str:
     """Render a simple Markdown table string."""
-    col_w = [max(len(h), max((len(str(r[i])) for r in rows), default=0))
-             for i, h in enumerate(headers)]
-    sep = "| " + " | ".join("-" * w for w in col_w) + " |"
+    col_w = [
+        max(len(h), max((len(str(r[i])) for r in rows), default=0))
+        for i, h in enumerate(headers)
+    ]
+    sep    = "| " + " | ".join("-" * w for w in col_w) + " |"
     header = "| " + " | ".join(h.ljust(col_w[i]) for i, h in enumerate(headers)) + " |"
-    lines = [header, sep]
+    lines  = [header, sep]
     for row in rows:
-        lines.append("| " + " | ".join(str(row[i]).ljust(col_w[i]) for i in range(len(headers))) + " |")
+        lines.append(
+            "| " + " | ".join(str(row[i]).ljust(col_w[i]) for i in range(len(headers))) + " |"
+        )
     return "\n".join(lines)
 
 
@@ -92,6 +106,76 @@ def _corr_rows(corr_dict: dict) -> list[list[str]]:
     return rows
 
 
+# ======================================================================
+# Per-task config groups
+# ======================================================================
+
+_CFG_GROUPS_CLASSIFICATION = [
+    ("Model",        ["model_name", "pretrained", "num_classes", "img_size",
+                      "depth", "num_heads", "embed_dim", "patch_size",
+                      "init_std", "use_scaled_init", "qk_norm", "label_smoothing"]),
+    ("Data",         ["dataset", "data_dir", "batch_size", "num_workers"]),
+    ("Optimiser",    ["optimizer", "learning_rate", "max_iters", "weight_decay",
+                      "beta1", "beta2", "grad_clip", "eps"]),
+    ("LR Schedule",  ["decay_lr", "warmup_iters", "lr_decay_iters", "min_lr"]),
+    ("Hessian",      ["hessian_intv", "hessian_max_iter", "hessian_batch_size",
+                      "compute_fd"]),
+    ("Entropy",      ["entropy_intv"]),
+    ("Intervention", ["temp_shift_step", "temp_shift_factor"]),
+    ("Compute",      ["device", "compile", "dtype", "seed"]),
+    ("I/O",          ["out_dir", "eval_interval", "log_interval",
+                      "checkpoint_interval", "save_checkpoint", "init_from"]),
+    ("W&B",          ["wandb_log", "wandb_project", "wandb_run_name"]),
+]
+
+_CFG_GROUPS_DEPTH = [
+    ("Model",        ["model_name", "img_size", "patch_size", "depth", "num_heads",
+                      "embed_dim", "init_std", "use_scaled_init", "qk_norm"]),
+    ("Loss",         ["silog_lambda"]),
+    ("Data",         ["data_dir", "batch_size", "num_workers"]),
+    ("Optimiser",    ["optimizer", "learning_rate", "max_iters", "weight_decay",
+                      "beta1", "beta2", "grad_clip", "eps"]),
+    ("LR Schedule",  ["decay_lr", "warmup_iters", "lr_decay_iters", "min_lr"]),
+    ("Hessian",      ["hessian_intv", "hessian_max_iter", "compute_fd"]),
+    ("Entropy",      ["entropy_intv"]),
+    ("Intervention", ["temp_shift_step", "temp_shift_factor"]),
+    ("Compute",      ["device", "compile", "dtype", "seed"]),
+    ("I/O",          ["out_dir", "eval_interval", "log_interval",
+                      "checkpoint_interval", "save_checkpoint", "init_from"]),
+    ("W&B",          ["wandb_log", "wandb_project", "wandb_run_name"]),
+]
+
+_CFG_GROUPS_LM = [
+    ("Model",        ["n_layer", "n_head", "n_kv_head", "n_embd", "sequence_len",
+                      "vocab_size", "window_pattern", "init_std", "use_scaled_init"]),
+    ("Data",         ["nanochat_dir", "batch_size", "num_workers"]),
+    ("Optimiser",    ["optimizer", "learning_rate", "max_iters", "weight_decay",
+                      "beta1", "beta2", "grad_clip", "eps"]),
+    ("MuonAdamW",    ["muon_matrix_lr", "muon_embedding_lr", "muon_unembedding_lr",
+                      "muon_scalar_lr", "muon_ns_steps"]),
+    ("LR Schedule",  ["warmup_iters", "warmdown_ratio", "min_lr_frac"]),
+    ("Hessian",      ["hessian_intv", "hessian_max_iter", "hessian_batch_size",
+                      "compute_fd", "label_smoothing"]),
+    ("Entropy",      ["entropy_intv"]),
+    ("Intervention", ["temp_shift_step", "temp_shift_factor"]),
+    ("Compute",      ["device", "compile", "compute_dtype", "seed"]),
+    ("I/O",          ["out_dir", "eval_interval", "log_interval",
+                      "checkpoint_interval", "save_checkpoint", "init_from"]),
+    ("W&B",          ["wandb_log", "wandb_project", "wandb_run_name"]),
+]
+
+_CFG_GROUPS_BY_TASK = {
+    "classification": _CFG_GROUPS_CLASSIFICATION,
+    "depth":          _CFG_GROUPS_DEPTH,
+    "lm":             _CFG_GROUPS_LM,
+}
+
+
+# ======================================================================
+# Markdown report writer
+# ======================================================================
+
+
 def _write_analysis_md(
     out_dir: str,
     run_label: str,
@@ -101,8 +185,10 @@ def _write_analysis_md(
     lam: float,
     hessian_intv: int,
     entropy_intv: int,
+    train_config: dict | None = None,
+    task: str = "classification",
 ) -> None:
-    """Write a Markdown analysis report to analysis.md."""
+    """Write a Markdown analysis report to ``analysis.md``."""
     lines = [
         f"# Analysis: {run_label}",
         "",
@@ -112,6 +198,28 @@ def _write_analysis_md(
         f"- **Entropy freq**: {entropy_intv}",
         "",
     ]
+
+    if train_config:
+        lines += ["## Training Configuration", ""]
+        cfg_groups = _CFG_GROUPS_BY_TASK.get(task, _CFG_GROUPS_CLASSIFICATION)
+        covered: set[str] = set()
+        for group_name, keys in cfg_groups:
+            group_rows = [[k, str(train_config[k])] for k in keys if k in train_config]
+            covered.update(k for k in keys if k in train_config)
+            if not group_rows:
+                continue
+            lines.append(f"### {group_name}")
+            lines.append("")
+            lines.append(_md_table(["Parameter", "Value"], group_rows))
+            lines.append("")
+        extra_rows = [
+            [k, str(v)] for k, v in sorted(train_config.items()) if k not in covered
+        ]
+        if extra_rows:
+            lines.append("### Other")
+            lines.append("")
+            lines.append(_md_table(["Parameter", "Value"], extra_rows))
+            lines.append("")
 
     if corr_results.get("raw"):
         lines += ["## Raw Correlations", ""]
@@ -158,16 +266,20 @@ def _write_analysis_md(
     print(f"[plot_history] analysis report → {md_path}")
 
 
-# ---------------------------------------------------------------------------
+# ======================================================================
+# Main API
+# ======================================================================
+
 
 def plot_history(
     pkl_path: str,
     out_dir: str | None = None,
     hessian_intv: int = 500,
-    entropy_intv: int = 100,
+    entropy_intv: int = 500,
     skip_intv: bool = True,
     lam: float = 10.0,
     compute_fd: bool = False,
+    task: str = "classification",
 ) -> None:
     """
     Load a ``history.pkl`` and reproduce every post-training plot and analysis.
@@ -187,6 +299,8 @@ def plot_history(
         skip_intv:    True (default) = interval-skipping; False = carry-forward.
         lam:          Whittaker–Henderson smoothing strength.
         compute_fd:   Include BFGS/FD metrics (must match training config).
+        task:         One of ``"classification"`` (ViT/ViT5), ``"depth"``
+                      (ViT_depth), or ``"lm"`` (nanochat).
     """
     with open(pkl_path, "rb") as f:
         history = pickle.load(f)
@@ -207,24 +321,28 @@ def plot_history(
     spike_all: dict[float, dict] = {}
 
     try:
+        # --- Correlations ---
         corr_results = print_correlations(
             history, run_label, lam=lam, include_smooth=True,
             skip_intv=skip_intv, hessian_intv=hessian_intv,
             compute_fd=compute_fd,
         )
 
+        # --- Training dynamics ---
         lr_value = history.get("lr", [0.0])
-        lr_peak = max(lr_value) if lr_value else 0.0
+        lr_peak  = max(lr_value) if lr_value else 0.0
         fig = plot_training_dynamics(
             histories={run_label: history},
             lrs={run_label: lr_peak},
             save_path=os.path.join(out_dir, "training_dynamics.png"),
             skip_intv=skip_intv,
             entropy_intv=entropy_intv,
+            task=task,
         )
         plt.close(fig)
-        print(f"[plot] training_dynamics.png")
+        print("[plot] training_dynamics.png")
 
+        # --- Smoothed curvature comparison ---
         fig_smooth = plot_curvature_smoothed_comparison(
             history, lam=lam,
             save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
@@ -233,8 +351,9 @@ def plot_history(
             compute_fd=compute_fd,
         )
         plt.close(fig_smooth)
-        print(f"[plot] curvature_smoothed_comparison.png")
+        print("[plot] curvature_smoothed_comparison.png")
 
+        # --- Spike co-occurrence ---
         proxy_label = {
             "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",
             "fd": "FD", "diag_h": "Diag_H", "fisher": "Fisher",
@@ -262,11 +381,13 @@ def plot_history(
     finally:
         sys.stdout = old_stdout
 
+    # --- Write plain-text log ---
     txt_path = os.path.join(out_dir, "analysis.txt")
     with open(txt_path, "w") as f:
         f.write(tee.getvalue())
     print(f"[plot_history] analysis.txt  → {txt_path}")
 
+    # --- Write Markdown report ---
     _write_analysis_md(
         out_dir=out_dir,
         run_label=run_label,
@@ -277,13 +398,18 @@ def plot_history(
         hessian_intv=hessian_intv,
         entropy_intv=entropy_intv,
         train_config=history.get("config"),
+        task=task,
     )
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Re-run post-training plots and analysis from a history.pkl file."
-    )
+# ======================================================================
+# CLI entry point (used by per-folder thin wrappers)
+# ======================================================================
+
+
+def build_arg_parser(description: str = "Re-run post-training analysis from history.pkl.") -> argparse.ArgumentParser:
+    """Return a pre-populated ArgumentParser for the plot_history CLI."""
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("pkl_path", type=str, help="Path to history.pkl")
     parser.add_argument(
         "-o", "--out-dir", type=str, default=None,
@@ -294,8 +420,8 @@ def main():
         help="Hessian computation frequency used during training (default: 500)",
     )
     parser.add_argument(
-        "--entropy_intv", type=int, default=100,
-        help="Entropy computation frequency used during training (default: 100)",
+        "--entropy_intv", type=int, default=500,
+        help="Entropy computation frequency used during training (default: 500)",
     )
     parser.add_argument(
         "--no-skip-intv", action="store_true",
@@ -309,18 +435,4 @@ def main():
         "--compute-fd", action="store_true",
         help="Include BFGS and FD metrics (only if computed during training)",
     )
-    args = parser.parse_args()
-
-    plot_history(
-        pkl_path=args.pkl_path,
-        out_dir=args.out_dir,
-        hessian_intv=args.hessian_intv,
-        entropy_intv=args.entropy_intv,
-        skip_intv=not args.no_skip_intv,
-        lam=args.lam,
-        compute_fd=args.compute_fd,
-    )
-
-
-if __name__ == "__main__":
-    main()
+    return parser

@@ -69,7 +69,7 @@ cd ../..
 
 ```bash
 python LLM/base_train.py --max_it 2 --hessian_freq 1 --entropy_freq 1 data_dir=LLM/nanoGPT/data/shakespeare_char
-python ViT/base_train.py --max_it 2 --hessian_freq 1 --entropy_freq 1
+python ViT/base_train.py --max_it 2 --hessian_intv 1 --entropy_intv 1
 ```
 
 ## Quick Start (LLM / NanoGPT)
@@ -150,8 +150,8 @@ python ViT/base_train.py \
     --optim adamw \
     --lr 1e-3 \
     --max_it 5000 \
-    hessian_freq=5 \
-    entropy_freq=10 \
+    hessian_intv=5 \
+    entropy_intv=10 \
     --wandb true \
     wandb_run_name=vit-cifar10-run
 ```

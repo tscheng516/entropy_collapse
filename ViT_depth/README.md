@@ -77,8 +77,8 @@ python depth/base_train.py config=nyudepth_base \
     learning_rate=2e-4 \
     max_iters=100000 \
     warmup_iters=5000 \
-    hessian_freq=10 \
-    entropy_freq=5 \
+    hessian_intv=10 \
+    entropy_intv=5 \
     wandb_log=true \
     wandb_run_name=vitb16-nyudepth-run
 ```

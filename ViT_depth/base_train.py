@@ -16,10 +16,10 @@ Logged every iteration:
 Logged every ``eval_interval``:
   * Val SILog loss, RMSE (log-scale), δ<1.25 accuracy
 
-Logged every ``hessian_freq``:
+Logged every ``hessian_intv``:
   * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher, KFAC
 
-Logged every ``entropy_freq``:
+Logged every ``entropy_intv``:
   * Per-layer attention entropy
 
 Usage
@@ -34,7 +34,7 @@ Named preset::
 
 Override individual fields::
 
-    python base_train.py --lr 5e-4 --max_it 10000 hessian_freq=100
+    python base_train.py --lr 5e-4 --max_it 10000 hessian_intv=100
 
 Multi-GPU via torchrun::
 
@@ -116,8 +116,8 @@ parser.add_argument("--optim", type=str)
 parser.add_argument("--lr", type=float)
 parser.add_argument("--max_it", type=int)
 parser.add_argument("--num_workers", type=int)
-parser.add_argument("--hessian_freq", type=int)
-parser.add_argument("--entropy_freq", type=int)
+parser.add_argument("--hessian_intv", type=int)
+parser.add_argument("--entropy_intv", type=int)
 parser.add_argument("--wandb", type=str)
 parser.add_argument(
     "--temp_shift",
@@ -144,8 +144,8 @@ _maybe_set("optimizer",    known_args.optim)
 _maybe_set("learning_rate", known_args.lr)
 _maybe_set("max_iters",    known_args.max_it)
 _maybe_set("num_workers",  known_args.num_workers)
-_maybe_set("hessian_freq", known_args.hessian_freq)
-_maybe_set("entropy_freq", known_args.entropy_freq)
+_maybe_set("hessian_intv", known_args.hessian_intv)
+_maybe_set("entropy_intv", known_args.entropy_intv)
 if known_args.wandb is not None:
     sval = str(known_args.wandb).lower()
     _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
@@ -395,10 +395,12 @@ if cfg.wandb_log:
 # ---------------------------------------------------------------------------
 # 8.  Helpers
 # ---------------------------------------------------------------------------
-from src.helpers import (  # noqa: E402
+from common.helpers import (  # noqa: E402
     get_VV_subspace_mask,
-    get_curvature_metrics,
     get_attention_entropy,
+)
+from src.helpers import (  # noqa: E402
+    get_curvature_metrics,
     scale_invariant_log_loss,
 )
 
@@ -580,7 +582,7 @@ for iter_num in range(iter_num, cfg.max_iters):
         for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd",
                   "diag_h", "fisher", "bfgs", "kfac")
     }
-    if iter_num % cfg.hessian_freq == 0:
+    if iter_num % cfg.hessian_intv == 0:
         _raw_model.train()
         optimizer.zero_grad()
         with torch.nn.attention.sdpa_kernel(
@@ -614,7 +616,7 @@ for iter_num in range(iter_num, cfg.max_iters):
 
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
-    _need_entropy = iter_num % cfg.entropy_freq == 0
+    _need_entropy = iter_num % cfg.entropy_intv == 0
 
     if _need_entropy:
         for blk in _raw_model.blocks:
@@ -656,7 +658,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 f"iter {iter_num:5d} | silog {loss_val:.4f} "
                 f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
             )
-            if iter_num % cfg.hessian_freq == 0:
+            if iter_num % cfg.hessian_intv == 0:
                 print(
                     f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
                     f"| H_VV {curvature['hessian_vv']:.3f} | GN {curvature['gn']:.3f} "
@@ -669,7 +671,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 "train/silog": loss_val,
                 "train/lr":    lr,
             }
-            if iter_num % cfg.hessian_freq == 0:
+            if iter_num % cfg.hessian_intv == 0:
                 log_dict.update(
                     {
                         "hessian/lambda_max": curvature["hessian"],
@@ -683,7 +685,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                         "hessian/KFAC":       curvature["kfac"],
                     }
                 )
-            if iter_num % cfg.entropy_freq == 0:
+            if iter_num % cfg.entropy_intv == 0:
                 log_dict.update(
                     {
                         f"entropy/layer_{i}": v
@@ -698,6 +700,8 @@ for iter_num in range(iter_num, cfg.max_iters):
 _save_checkpoint("final_ckpt")
 
 if not use_ddp or rank == 0:
+    import dataclasses
+    history["config"] = dataclasses.asdict(cfg)
     history_path = os.path.join(run_out_dir, "history.pkl")
     with open(history_path, "wb") as f:
         pickle.dump(history, f)
@@ -710,14 +714,15 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from plot_history import plot_history  # noqa: E402
+    from common.plot_history import plot_history  # noqa: E402
 
     plot_history(
         pkl_path=history_path,
         out_dir=run_out_dir,
-        hessian_freq=cfg.hessian_freq,
-        entropy_freq=cfg.entropy_freq,
+        hessian_intv=cfg.hessian_intv,
+        entropy_intv=cfg.entropy_intv,
         skip_intv=True,
         lam=100.0,
         compute_fd=cfg.compute_fd,
+        task="depth",
     )

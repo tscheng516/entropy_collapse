@@ -1,35 +1,59 @@
 """
-Plotting utilities for the depth/ entropy-collapse experiments.
+Shared plotting utilities for all entropy-collapse sub-projects.
 
-This module is self-contained and mirrors ``ViT/src/plotting.py``.
+All five function families are provided here and imported by per-project
+``src/plotting.py`` thin wrappers so each folder stays self-contained for
+existing callers.
 
-The key difference: the training-dynamics plot shows SILog loss and RMSE
-instead of cross-entropy loss and top-1 accuracy.  All curvature and spike
-co-occurrence plots are identical to the ViT/ version.
-
-Families of utilities provided:
-
-1. ``plot_curvature_smoothed_comparison`` — raw vs smoothed for all nine
-                                 spectral-norm curvature metrics.
-2. ``plot_spike_cooccurrence`` — MAD-based joint/disjoint spike timeline.
-3. ``plot_all_spike_cooccurrences`` — λ_max(H) vs each other proxy.
-4. ``print_correlations`` — raw + smoothed correlation report.
-5. ``plot_training_dynamics`` — compact training figure (loss, RMSE, entropy).
+Families
+--------
+1. ``plot_curvature_smoothed_comparison`` — raw vs smoothed for all nine metrics.
+2. ``plot_spike_cooccurrence``            — MAD-based joint/disjoint spike timeline.
+3. ``plot_all_spike_cooccurrences``       — λ_max(H) vs each other proxy.
+4. ``print_correlations``                 — unified raw + smoothed correlation report.
+5. ``plot_training_dynamics``             — compact training figure with ``task=``
+                                           dispatch:
+                                           * ``"classification"`` — 3 cols: CE loss /
+                                             accuracy / entropy  (ViT, ViT5)
+                                           * ``"depth"``          — 3 cols: SILog /
+                                             RMSE+δ<1.25 / entropy  (ViT_depth)
+                                           * ``"lm"``             — 2 cols: CE loss /
+                                             entropy  (nanochat)
 """
 
 from __future__ import annotations
+
+import os
+import sys
+
+# ---------------------------------------------------------------------------
+# Path bootstrap — ensure the project root is on sys.path so that
+# ``from common.helpers import ...`` resolves when this file is imported
+# from any sub-project's src/ directory.
+# ---------------------------------------------------------------------------
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_THIS_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import median_filter
 from scipy import stats as sp_stats
 
-from src.helpers import smooth_log_trend
+from common.helpers import smooth_log_trend
 
+# Consistency factor: sigma ≈ 1.4826 × MAD for a normal distribution.
 _MAD_TO_STD = 1.4826
 
 
+# ======================================================================
+# Private helpers — carry-forward / extraction
+# ======================================================================
+
+
 def _carry_forward_positive(series: np.ndarray | list) -> np.ndarray:
+    """Fill non-positive / non-finite samples with the most recent positive value."""
     arr = np.asarray(series, dtype=float).copy().ravel()
     if arr.size == 0:
         return arr
@@ -45,6 +69,7 @@ def _carry_forward_positive(series: np.ndarray | list) -> np.ndarray:
 
 
 def _carry_forward_positive_2d(matrix: np.ndarray | list) -> np.ndarray:
+    """Apply positive carry-forward independently to each column."""
     arr = np.asarray(matrix, dtype=float)
     if arr.ndim != 2 or arr.size == 0:
         return arr
@@ -55,6 +80,7 @@ def _carry_forward_positive_2d(matrix: np.ndarray | list) -> np.ndarray:
 
 
 def _has_positive_finite(arr: np.ndarray | list) -> bool:
+    """Return True when an array contains at least one finite value > 0."""
     a = np.asarray(arr, dtype=float).ravel()
     if a.size == 0:
         return False
@@ -62,6 +88,7 @@ def _has_positive_finite(arr: np.ndarray | list) -> bool:
 
 
 def _extract_positive(series: np.ndarray | list) -> tuple[np.ndarray, np.ndarray]:
+    """Extract positive finite values and their original indices."""
     arr = np.asarray(series, dtype=float).ravel()
     if arr.size == 0:
         return np.array([]), np.array([], dtype=int)
@@ -71,6 +98,7 @@ def _extract_positive(series: np.ndarray | list) -> tuple[np.ndarray, np.ndarray
 
 
 def _extract_positive_2d(matrix: np.ndarray | list) -> tuple[np.ndarray, np.ndarray]:
+    """Extract rows where any column has a positive finite value."""
     arr = np.asarray(matrix, dtype=float)
     if arr.ndim != 2 or arr.size == 0:
         return arr, np.arange(max(len(arr), 0), dtype=int)
@@ -93,9 +121,36 @@ def plot_curvature_smoothed_comparison(
     compute_fd: bool = False,
 ) -> plt.Figure:
     """
-    Plot all nine spectral-norm curvature metrics (raw + smoothed).
+    Plot all nine spectral-norm curvature metrics (raw + smoothed) side-by-side.
 
-    Identical to ``ViT/src/plotting.py:plot_curvature_smoothed_comparison``.
+    Uses the same visual style as the training dynamics plot. Raw curves are
+    thin and semi-transparent; smoothed trends (via log-space Whittaker–Henderson
+    smoother) are thick and opaque overlaid on top.
+
+    The nine metrics are:
+      * hessian (H) — exact Hessian power iteration
+      * prec_h — Adam-preconditioned Hessian
+      * hessian_vv (H_VV) — value-projection subspace
+      * gn — Gauss-Newton
+      * bfgs — central-difference FD (only when compute_fd=True)
+      * fd — forward-difference FD (only when compute_fd=True)
+      * diag_h — max diagonal Hessian
+      * fisher — empirical Fisher
+      * kfac — K-FAC proxy
+
+    Args:
+        history:      Training history dict with curvature metric keys.
+        lam:          Smoothing strength for ``smooth_log_trend``.
+        save_path:    If provided, save the figure to this path.
+        skip_intv:    If True (default), skip zero-placeholder intervals and
+                      plot only actually-measured values against their true
+                      iteration indices.  If False, use the legacy
+                      ``_carry_forward_positive`` step-function fill.
+        hessian_intv: Hessian computation frequency (used for x-axis label).
+        compute_fd:   If False (default), skip BFGS and FD metrics entirely.
+
+    Returns:
+        The matplotlib ``Figure`` object.
     """
     fig, ax = plt.subplots(figsize=(14, 8))
 
@@ -122,50 +177,79 @@ def plot_curvature_smoothed_comparison(
 
     prec_arr, prec_idx = _prep("prec_h")
     if _has_positive_finite(prec_arr):
-        ax.plot(prec_idx, prec_arr, color="purple", linestyle="--", linewidth=2,
-                label=r"Precond. Hessian ($\tilde{H}$)")
+        ax.plot(
+            prec_idx, prec_arr,
+            color="purple", linestyle="--", linewidth=2,
+            label=r"Precond. Hessian ($\tilde{H}$)",
+        )
 
     gn_arr, gn_idx = _prep("gn")
     if _has_positive_finite(gn_arr):
-        ax.plot(gn_idx, gn_arr, color="brown", linestyle="--", linewidth=2,
-                label=r"Gauss-Newton ($H^{GN}$)")
+        ax.plot(
+            gn_idx, gn_arr,
+            color="brown", linestyle="--", linewidth=2,
+            label=r"Gauss-Newton ($H^{GN}$)",
+        )
 
     vv_arr, vv_idx = _prep("hessian_vv")
     if _has_positive_finite(vv_arr):
-        ax.plot(vv_idx, vv_arr, color="magenta", linestyle=":", linewidth=2,
-                label=r"Value Subspace ($H_{VV}$)")
+        ax.plot(
+            vv_idx, vv_arr,
+            color="magenta", linestyle=":", linewidth=2,
+            label=r"Value Subspace ($H_{VV}$)",
+        )
 
     diag_arr, diag_idx = _prep("diag_h")
     if _has_positive_finite(diag_arr):
-        ax.plot(diag_idx, diag_arr, color="teal", linestyle="-.", linewidth=2,
-                label="Diag Hessian")
+        ax.plot(
+            diag_idx, diag_arr,
+            color="teal", linestyle="-.", linewidth=2,
+            label="Diag Hessian",
+        )
 
     fisher_arr, fisher_idx = _prep("fisher")
     if _has_positive_finite(fisher_arr):
-        ax.plot(fisher_idx, fisher_arr, color="olive", linestyle="-.", linewidth=2,
-                label="Empirical Fisher")
+        ax.plot(
+            fisher_idx, fisher_arr,
+            color="olive", linestyle="-.", linewidth=2,
+            label="Empirical Fisher",
+        )
 
     if compute_fd:
         bfgs_arr, bfgs_idx = _prep("bfgs")
         if _has_positive_finite(bfgs_arr):
-            ax.plot(bfgs_idx, bfgs_arr, color="navy", linestyle=":", linewidth=2,
-                    label="BFGS")
+            ax.plot(
+                bfgs_idx, bfgs_arr,
+                color="navy", linestyle=":", linewidth=2,
+                label="BFGS",
+            )
+        elif _has_positive_finite(_as1d("bfgs")):
+            print("[warn] compute_fd=True but BFGS data has no positive values")
+
         fd_arr, fd_idx = _prep("fd")
         if _has_positive_finite(fd_arr):
-            ax.plot(fd_idx, fd_arr, color="cyan", linestyle="-.", linewidth=2,
-                    label="FD")
+            ax.plot(
+                fd_idx, fd_arr,
+                color="cyan", linestyle="-.", linewidth=2,
+                label="FD",
+            )
+        elif _has_positive_finite(_as1d("fd")):
+            print("[warn] compute_fd=True but FD data has no positive values")
     else:
         bfgs_arr, bfgs_idx = np.array([]), np.array([], dtype=int)
         fd_arr, fd_idx = np.array([]), np.array([], dtype=int)
 
     kfac_arr, kfac_idx = _prep("kfac")
     if _has_positive_finite(kfac_arr):
-        ax.plot(kfac_idx, kfac_arr, color="darkgreen", linestyle=":", linewidth=2,
-                label="K-FAC")
+        ax.plot(
+            kfac_idx, kfac_arr,
+            color="darkgreen", linestyle=":", linewidth=2,
+            label="K-FAC",
+        )
 
-    _smooth_lam  = lam
+    _smooth_lam = lam
     _smooth_alpha = 0.45
-    _smooth_lw   = 5
+    _smooth_lw = 5
 
     def _overlay_smooth(arr, idx, color):
         if arr.size >= 3:
@@ -192,13 +276,8 @@ def plot_curvature_smoothed_comparison(
         _overlay_smooth(kfac_arr, kfac_idx, "darkgreen")
 
     ax.set_yscale("log")
-    ax.set_title(
-        f"All Curvature Metrics (λ_max) — Raw vs Smoothed (λ={lam})", fontsize=13
-    )
-    _xlabel = (
-        f"Iteration (every {hessian_intv})"
-        if skip_intv and hessian_intv > 1 else "Iteration"
-    )
+    ax.set_title(f"All Curvature Metrics (λ_max) — Raw vs Smoothed (λ={lam})", fontsize=13)
+    _xlabel = f"Iteration (every {hessian_intv})" if skip_intv and hessian_intv > 1 else "Iteration"
     ax.set_xlabel(_xlabel, fontsize=12)
     ax.set_ylabel("Spectral Norm (λ_max)", fontsize=12)
     ax.legend(fontsize="small", loc="best")
@@ -226,9 +305,29 @@ def plot_spike_cooccurrence(
     save_path: str | None = None,
 ) -> tuple[plt.Figure, dict]:
     """
-    Detect and plot spike co-occurrence between two metric time-series.
+    Detect and plot spike co-occurrence between two metric time-series using
+    the Median Absolute Deviation (MAD) method.
 
-    Identical to ``ViT/src/plotting.py:plot_spike_cooccurrence``.
+    Spikes are local anomalies — points that deviate from a rolling-median
+    baseline by more than ``z_score`` MADs.  The timeline strip shows:
+      * Blue  ``|``  — spikes in X only
+      * Red   ``×``  — joint spikes (both X and Y spike together)
+      * Orange ``|`` — spikes in Y only
+
+    Args:
+        x, y:       1-D arrays of the same length.
+        x_name:     Label for the X series.
+        y_name:     Label for the Y series.
+        window:     Median-filter window size.
+        z_score:    MAD multiplier for spike detection.
+        log_scale:  If True, take log of the series before residuals.
+        save_path:  If provided, save the figure to this path.
+
+    Returns:
+        fig:     The matplotlib ``Figure``.
+        results: Dict with keys ``P(Y_spike | X_spike)``,
+                 ``baseline_P(Y_spike)``, ``n_X_spikes``, ``n_Y_spikes``,
+                 ``n_joint_spikes``, ``n_points``.
     """
     x = np.asarray(x, dtype=float).ravel()
     y = np.asarray(y, dtype=float).ravel()
@@ -251,12 +350,14 @@ def plot_spike_cooccurrence(
         results = {
             "P(Y_spike | X_spike)": float("nan"),
             "baseline_P(Y_spike)": float("nan"),
-            "n_X_spikes": 0, "n_Y_spikes": 0,
-            "n_joint_spikes": 0, "n_points": 0,
+            "n_X_spikes": 0,
+            "n_Y_spikes": 0,
+            "n_joint_spikes": 0,
+            "n_points": 0,
         }
         fig = plt.figure(figsize=(12, 2.5))
-        plt.text(0.5, 0.5, "No valid data points",
-                 ha="center", va="center", transform=plt.gca().transAxes)
+        plt.text(0.5, 0.5, "No valid data points", ha="center", va="center",
+                 transform=plt.gca().transAxes)
         plt.yticks([1, 1.5, 2], [f"{y_name} Only", "Joint", f"{x_name} Only"])
         plt.xlabel("Iteration")
         plt.title(f"Local Spike Co-occurrence: {x_name} vs {y_name} (Z > {z_score})")
@@ -277,6 +378,7 @@ def plot_spike_cooccurrence(
 
     x_base = median_filter(x_c, size=window)
     y_base = median_filter(y_c, size=window)
+
     x_res = x_c - x_base
     y_res = y_c - y_base
 
@@ -287,28 +389,29 @@ def plot_spike_cooccurrence(
     y_spike = y_res > z_score * y_mad
     joint_spike = x_spike & y_spike
 
-    x_spike_iters   = idx[x_spike]
-    y_spike_iters   = idx[y_spike]
+    x_spike_iters = idx[x_spike]
+    y_spike_iters = idx[y_spike]
     joint_spike_iters = idx[joint_spike]
 
-    n_x   = len(x_spike_iters)
-    n_y   = len(y_spike_iters)
+    n_x = len(x_spike_iters)
+    n_y = len(y_spike_iters)
     n_both = len(joint_spike_iters)
     n_pts = len(x_c)
 
     cond_prob = n_both / n_x if n_x > 0 else float("nan")
-    baseline  = n_y / n_pts if n_pts > 0 else float("nan")
+    baseline = n_y / n_pts if n_pts > 0 else float("nan")
 
     results = {
         "P(Y_spike | X_spike)": cond_prob,
-        "baseline_P(Y_spike)":  baseline,
-        "n_X_spikes":           n_x,
-        "n_Y_spikes":           n_y,
-        "n_joint_spikes":       n_both,
-        "n_points":             n_pts,
+        "baseline_P(Y_spike)": baseline,
+        "n_X_spikes": n_x,
+        "n_Y_spikes": n_y,
+        "n_joint_spikes": n_both,
+        "n_points": n_pts,
     }
 
     fig = plt.figure(figsize=(12, 2.5))
+
     x_only = np.setdiff1d(x_spike_iters, joint_spike_iters)
     y_only = np.setdiff1d(y_spike_iters, joint_spike_iters)
 
@@ -346,9 +449,14 @@ def plot_all_spike_cooccurrences(
     compute_fd: bool = False,
 ) -> tuple[dict[str, plt.Figure], dict[str, dict]]:
     """
-    Compute MAD spike co-occurrence for λ_max(H) vs each curvature proxy.
+    Compute MAD spike co-occurrence for lambda_max(H) versus each other proxy.
 
-    Identical to ``ViT/src/plotting.py:plot_all_spike_cooccurrences``.
+    Args:
+        skip_intv:    If True (default), extract only positive finite values.
+        hessian_intv: Hessian computation frequency (informational).
+        compute_fd:   If False (default), skip BFGS and FD proxies.
+
+    Returns figures/results keyed by proxy name.
     """
     h_raw = np.asarray(history.get("hessian", []), dtype=float).ravel()
     if skip_intv:
@@ -358,16 +466,16 @@ def plot_all_spike_cooccurrences(
         h_idx = np.arange(len(h))
 
     proxy_specs = [
-        ("prec_h",     "Prec_H",  "hessian_prec"),
-        ("hessian_vv", "H_VV",    "hessian_vv"),
-        ("gn",         "GN",      "hessian_gn"),
-        ("diag_h",     "Diag_H",  "hessian_diag"),
-        ("fisher",     "Fisher",  "hessian_fisher"),
-        ("kfac",       "KFAC",    "hessian_kfac"),
+        ("prec_h", "Prec_H", "hessian_prec"),
+        ("hessian_vv", "H_VV", "hessian_vv"),
+        ("gn", "GN", "hessian_gn"),
+        ("diag_h", "Diag_H", "hessian_diag"),
+        ("fisher", "Fisher", "hessian_fisher"),
+        ("kfac", "KFAC", "hessian_kfac"),
     ]
     if compute_fd:
         proxy_specs.extend([
-            ("fd",   "FD",   "hessian_fd"),
+            ("fd", "FD", "hessian_fd"),
             ("bfgs", "BFGS", "hessian_bfgs"),
         ])
 
@@ -417,9 +525,22 @@ def print_correlations(
     compute_fd: bool = False,
 ) -> dict:
     """
-    Print raw and smoothed correlations for curvature metrics.
+    Print raw and smoothed correlations for curvature metrics and return a
+    structured results dict for downstream reporting.
 
-    Identical to ``ViT/src/plotting.py:print_correlations``.
+    Args:
+        history:        Training history dict.
+        name:           Experiment name (printed as a header).
+        sample_every:   Subsample stride applied after extraction.
+        lam:            Whittaker–Henderson smoothing strength.
+        include_smooth: If False, skip the smoothed-correlation block.
+        skip_intv:      If True (default), use only positive finite values.
+        hessian_intv:   Hessian computation frequency (informational).
+        compute_fd:     If True, include BFGS and FD metrics.
+
+    Returns:
+        dict with keys ``raw``, ``smoothed``, ``entropy`` — each mapping
+        a pair label to ``{"spearman": float, "pearson": float}``.
     """
     def _gk(d, *keys):
         for k in keys:
@@ -529,7 +650,6 @@ def print_correlations(
             _corr(prec_h_s, fd_s,   "Prec_H vs FD     ", results["smoothed"])
             _corr(prec_h_s, bfgs_s, "Prec_H vs BFGS   ", results["smoothed"])
 
-    # --- Proxy vs entropy ---
     raw_ent = history.get("entropy", [])
     if raw_ent and len(raw_ent) > 0:
         ent_arr = np.array(raw_ent[::sample_every])
@@ -560,14 +680,14 @@ def print_smooth_correlations(
     lam: float = 10.0,
     sample_every: int = 1,
 ) -> dict:
-    """Backward-compatible wrapper — delegates to print_correlations."""
+    """Backward-compatible wrapper — delegates to ``print_correlations``."""
     return print_correlations(
         history, name, sample_every=sample_every, lam=lam, include_smooth=True,
     )
 
 
 # ======================================================================
-# Training dynamics — depth-specific multi-panel grid
+# Training dynamics — multi-panel grid
 # ======================================================================
 
 
@@ -577,35 +697,36 @@ def plot_training_dynamics(
     save_path: str | None = None,
     skip_intv: bool = True,
     entropy_intv: int = 1,
+    task: str = "classification",
 ) -> plt.Figure:
     """
-    Plot compact training dynamics for depth estimation.
+    Plot compact training dynamics for one or more runs.
 
-    Panels per run (3 columns):
-        * Col 0 — train / val SILog loss
-        * Col 1 — val RMSE (log scale) + val δ<1.25 (secondary axis)
-        * Col 2 — per-layer attention entropy
+    Layout is driven by the ``task`` argument:
 
-    History dict keys used:
-        ``loss``        — dense train SILog per iteration
-        ``val_loss``    — sparse list of (iter, val_silog) tuples
-        ``val_rmse``    — sparse list of (iter, rmse) tuples
-        ``val_delta1``  — sparse list of (iter, delta1) tuples
-        ``entropy``     — list of per-layer entropy floats
+    * ``"classification"`` — 3 cols: CE loss / accuracy / entropy  (ViT, ViT5)
+    * ``"depth"``          — 3 cols: SILog loss / RMSE+δ<1.25 / entropy (ViT_depth)
+    * ``"lm"``             — 2 cols: CE loss / entropy  (nanochat)
 
     Args:
-        histories:    Dict mapping run name to history dict.
+        histories:    Dict mapping run name to a history dict.  Keys used:
+                      ``loss``, ``val_loss``, ``acc``/``train_acc``,
+                      ``val_acc``/``test_acc``, ``val_rmse``, ``val_delta1``,
+                      ``entropy``.
         lrs:          Dict mapping run name to peak LR (API compatibility).
         save_path:    If provided, save the figure to this path.
-        skip_intv:    Skip zero-placeholder entropy rows.
-        entropy_intv: Entropy computation frequency for x-axis label.
+        skip_intv:    If True (default), skip zero-placeholder entropy rows.
+        entropy_intv: Entropy computation frequency (used for x-axis label).
+        task:         One of ``"classification"``, ``"depth"``, ``"lm"``.
 
     Returns:
         The matplotlib ``Figure`` object.
     """
     opt_names = list(histories.keys())
     n_rows = len(opt_names)
-    fig, axs = plt.subplots(n_rows, 3, figsize=(21, 4.8 * n_rows))
+    n_cols = 2 if task == "lm" else 3
+    fw = 14 if task == "lm" else 21
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(fw, 4.8 * n_rows))
     if n_rows == 1:
         axs = axs[np.newaxis, :]
 
@@ -623,8 +744,8 @@ def plot_training_dynamics(
             return arr.ravel()
 
         def _sparse_or_dense(series, dense_color, dense_label, ax,
-                              sparse_color=None, sparse_label=None,
-                              linestyle="--"):
+                             sparse_color=None, sparse_label=None,
+                             linestyle="--"):
             if not isinstance(series, list) or len(series) == 0:
                 return False
             first = series[0]
@@ -643,52 +764,81 @@ def plot_training_dynamics(
                         linewidth=2, label=dense_label)
             return True
 
-        # --- Col 0: train/val SILog loss ---
+        # --- Col 0: loss (all tasks) ---
         ax_loss = axs[row, 0]
         loss_arr = _as1d("loss")
-        ax_loss.plot(loss_arr, color=color, linewidth=2, label=f"{name} train SILog")
-        _sparse_or_dense(
-            h.get("val_loss", []),
-            dense_color="crimson", dense_label=f"{name} val SILog",
-            ax=ax_loss,
-        )
-        ax_loss.set_title(f"{name} Scale-Invariant Log Loss")
+        if task == "depth":
+            train_label = f"{name} train SILog"
+            val_label   = f"{name} val SILog"
+            loss_ylabel = "SILog loss"
+            loss_title  = f"{name} Scale-Invariant Log Loss"
+        else:
+            train_label = "train loss"
+            val_label   = "val loss"
+            loss_ylabel = "Cross-entropy loss"
+            loss_title  = "Loss"
+        ax_loss.plot(loss_arr, color=color, linewidth=2, label=train_label)
+        _sparse_or_dense(h.get("val_loss", []), dense_color="crimson",
+                         dense_label=val_label, ax=ax_loss)
+        ax_loss.set_title(loss_title)
         ax_loss.set_xlabel("Iteration")
-        ax_loss.set_ylabel("SILog loss")
+        ax_loss.set_ylabel(loss_ylabel)
         ax_loss.legend(loc="upper right")
         ax_loss.grid(True, alpha=0.25, linestyle="--")
 
-        # --- Col 1: val RMSE + δ<1.25 ---
-        ax_rmse = axs[row, 1]
-        _sparse_or_dense(
-            h.get("val_rmse", []),
-            dense_color=color, dense_label=f"{name} val RMSE (log)",
-            ax=ax_rmse,
-        )
-        ax_rmse.set_title(f"{name} Depth Metrics")
-        ax_rmse.set_xlabel("Iteration")
-        ax_rmse.set_ylabel("RMSE (log)", color=color)
-        ax_rmse.tick_params(axis="y", labelcolor=color)
+        # --- Col 1 / middle panel (classification or depth only) ---
+        ent_col = 1  # default for lm
+        if task == "classification":
+            ax_acc = axs[row, 1]
+            train_acc = _as1d("acc", "train_acc")
+            if train_acc.size:
+                ax_acc.plot(train_acc, color=color, linewidth=2, label="train acc")
+            _sparse_or_dense(
+                h.get("val_acc", h.get("test_acc", [])),
+                dense_color="crimson", dense_label="val acc", ax=ax_acc,
+            )
+            ax_acc.set_title("Accuracy")
+            ax_acc.set_xlabel("Iteration")
+            ax_acc.set_ylabel("Accuracy")
+            ax_acc.yaxis.set_major_formatter(
+                plt.matplotlib.ticker.PercentFormatter(xmax=1.0)
+                if (train_acc.size and train_acc.max() <= 1.0) else
+                plt.matplotlib.ticker.ScalarFormatter()
+            )
+            ax_acc.legend(loc="lower right")
+            ax_acc.grid(True, alpha=0.25, linestyle="--")
+            ent_col = 2
 
-        # Secondary axis: δ<1.25
-        ax_d1 = ax_rmse.twinx()
-        _sparse_or_dense(
-            h.get("val_delta1", []),
-            dense_color="crimson", dense_label=f"{name} δ<1.25",
-            ax=ax_d1,
-        )
-        ax_d1.set_ylabel("δ<1.25 (%)", color="crimson")
-        ax_d1.tick_params(axis="y", labelcolor="crimson")
+        elif task == "depth":
+            ax_rmse = axs[row, 1]
+            _sparse_or_dense(
+                h.get("val_rmse", []),
+                dense_color=color, dense_label=f"{name} val RMSE (log)",
+                ax=ax_rmse,
+            )
+            ax_rmse.set_title(f"{name} Depth Metrics")
+            ax_rmse.set_xlabel("Iteration")
+            ax_rmse.set_ylabel("RMSE (log)", color=color)
+            ax_rmse.tick_params(axis="y", labelcolor=color)
 
-        # Combine legends
-        lines1, labels1 = ax_rmse.get_legend_handles_labels()
-        lines2, labels2 = ax_d1.get_legend_handles_labels()
-        ax_rmse.legend(lines1 + lines2, labels1 + labels2, loc="lower right",
-                       fontsize="small")
-        ax_rmse.grid(True, alpha=0.25, linestyle="--")
+            ax_d1 = ax_rmse.twinx()
+            _sparse_or_dense(
+                h.get("val_delta1", []),
+                dense_color="crimson", dense_label=f"{name} δ<1.25",
+                ax=ax_d1,
+            )
+            ax_d1.set_ylabel("δ<1.25 (%)", color="crimson")
+            ax_d1.tick_params(axis="y", labelcolor="crimson")
 
-        # --- Col 2: per-layer attention entropy ---
-        ax_ent = axs[row, 2]
+            lines1, labels1 = ax_rmse.get_legend_handles_labels()
+            lines2, labels2 = ax_d1.get_legend_handles_labels()
+            ax_rmse.legend(lines1 + lines2, labels1 + labels2,
+                           loc="lower right", fontsize="small")
+            ax_rmse.grid(True, alpha=0.25, linestyle="--")
+            ent_col = 2
+
+        # --- Entropy panel ---
+        ax_ent = axs[row, ent_col]
         raw_entropy = np.array(h.get("entropy", []))
         if skip_intv:
             entropies, ent_idx = _extract_positive_2d(raw_entropy)
