@@ -1,5 +1,6 @@
 """
 Plotting utilities for the nanochat entropy-collapse experiments.
+This file is used other than common/plotting for LM task.
 
 This module is self-contained: all spike-detection and correlation helpers
 live here so no shared ``common/`` package is required.
@@ -524,15 +525,25 @@ def print_correlations(
     skip_intv: bool = True,
     hessian_intv: int = 1,
     compute_fd: bool = False,
+    start: int = 0,
+    end: int = -1,
 ) -> dict:
     """
     Print raw and smoothed correlations for curvature metrics and return
     a structured results dict for downstream reporting.
+
+    Args:
+        start: First iteration index to include (default 0).
+        end:   One-past-last iteration index; -1 means the full history
+               (default -1).  Slicing is applied before positive-value
+               extraction.
     """
+    _end = None if end == -1 else end
+
     def _gk(d, *keys):
         for k in keys:
             if k in d:
-                raw = np.array(d[k])
+                raw = np.array(d[k])[start:_end]
                 if skip_intv:
                     vals, _ = _extract_positive(raw)
                     return vals[::sample_every]
@@ -639,7 +650,7 @@ def print_correlations(
 
     raw_ent = history.get("entropy", [])
     if raw_ent and len(raw_ent) > 0:
-        ent_arr = np.array(raw_ent[::sample_every])
+        ent_arr = np.array(raw_ent)[start:_end][::sample_every]
         if ent_arr.ndim == 2 and ent_arr.shape[1] > 0:
             ent_first = ent_arr[:, 0]
             ent_avg   = ent_arr.mean(axis=1)

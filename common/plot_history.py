@@ -106,6 +106,41 @@ def _corr_rows(corr_dict: dict) -> list[list[str]]:
     return rows
 
 
+_WINDOW_LABELS = ["Whole", "Q1", "Q2", "Q3", "Q4"]
+
+
+def _corr_table_by_window(corr_by_window: dict[str, dict], section: str) -> str:
+    """Build a Markdown table with Spearman and Pearson columns for each window."""
+    all_pairs: list[str] = []
+    seen: set[str] = set()
+    for lbl in _WINDOW_LABELS:
+        cd = corr_by_window.get(lbl, {}).get(section, {})
+        for pair in cd:
+            pair_clean = pair.strip()
+            if pair_clean not in seen:
+                seen.add(pair_clean)
+                all_pairs.append(pair_clean)
+    if not all_pairs:
+        return ""
+    headers = ["Pair"]
+    for lbl in _WINDOW_LABELS:
+        headers += [f"{lbl} Sp", f"{lbl} Pe"]
+    rows = []
+    for pair in all_pairs:
+        row = [pair]
+        for lbl in _WINDOW_LABELS:
+            cd = corr_by_window.get(lbl, {}).get(section, {})
+            val = next((v for k, v in cd.items() if k.strip() == pair), None)
+            if isinstance(val, dict):
+                row.append(f"{val['spearman']:.4f}")
+                row.append(f"{val['pearson']:.4f}")
+            else:
+                row.append("n/a")
+                row.append("n/a")
+        rows.append(row)
+    return _md_table(headers, rows)
+
+
 # ======================================================================
 # Per-task config groups
 # ======================================================================
@@ -180,7 +215,7 @@ def _write_analysis_md(
     out_dir: str,
     run_label: str,
     pkl_path: str,
-    corr_results: dict,
+    corr_by_window: dict[str, dict],
     spike_all: dict[float, dict],
     lam: float,
     hessian_intv: int,
@@ -221,26 +256,17 @@ def _write_analysis_md(
             lines.append(_md_table(["Parameter", "Value"], extra_rows))
             lines.append("")
 
-    if corr_results.get("raw"):
-        lines += ["## Raw Correlations", ""]
-        rows = _corr_rows(corr_results["raw"])
-        if rows:
-            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
-        lines.append("")
+    raw_table = _corr_table_by_window(corr_by_window, "raw")
+    if raw_table:
+        lines += ["## Raw Correlations", "", raw_table, ""]
 
-    if corr_results.get("smoothed"):
-        lines += [f"## Smoothed Correlations (λ={lam})", ""]
-        rows = _corr_rows(corr_results["smoothed"])
-        if rows:
-            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
-        lines.append("")
+    smoothed_table = _corr_table_by_window(corr_by_window, "smoothed")
+    if smoothed_table:
+        lines += [f"## Smoothed Correlations (λ={lam})", "", smoothed_table, ""]
 
-    if corr_results.get("entropy"):
-        lines += [f"## Proxy vs Entropy (smoothed, λ={lam})", ""]
-        rows = _corr_rows(corr_results["entropy"])
-        if rows:
-            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
-        lines.append("")
+    entropy_table = _corr_table_by_window(corr_by_window, "entropy")
+    if entropy_table:
+        lines += [f"## Proxy vs Entropy (smoothed, λ={lam})", "", entropy_table, ""]
 
     proxy_label_map = {
         "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",
@@ -313,20 +339,34 @@ def plot_history(
 
     run_label = os.path.basename(os.path.dirname(os.path.abspath(pkl_path)))
 
+    # Determine iteration windows for quarter-wise correlation analysis.
+    cfg = history.get("config") or {}
+    max_iter = int(cfg.get("max_iters", n_iters) or n_iters)
+    q = max(max_iter // 4, 1)
+    _windows = [
+        ("Whole", 0,       -1),
+        ("Q1",    0,        q),
+        ("Q2",    q,    2 * q),
+        ("Q3",    2 * q, 3 * q),
+        ("Q4",    3 * q,   -1),
+    ]
+
     tee = _Tee(sys.stdout)
     old_stdout = sys.stdout
     sys.stdout = tee
 
-    corr_results: dict = {}
+    corr_by_window: dict[str, dict] = {}
     spike_all: dict[float, dict] = {}
 
     try:
-        # --- Correlations ---
-        corr_results = print_correlations(
-            history, run_label, lam=lam, include_smooth=True,
-            skip_intv=skip_intv, hessian_intv=hessian_intv,
-            compute_fd=compute_fd,
-        )
+        # --- Correlations (whole history + four quarters) ---
+        for win_label, win_start, win_end in _windows:
+            corr_by_window[win_label] = print_correlations(
+                history, f"{run_label} [{win_label}]", lam=lam,
+                include_smooth=True, skip_intv=skip_intv,
+                hessian_intv=hessian_intv, compute_fd=compute_fd,
+                start=win_start, end=win_end,
+            )
 
         # --- Training dynamics ---
         lr_value = history.get("lr", [0.0])
@@ -392,7 +432,7 @@ def plot_history(
         out_dir=out_dir,
         run_label=run_label,
         pkl_path=pkl_path,
-        corr_results=corr_results,
+        corr_by_window=corr_by_window,
         spike_all=spike_all,
         lam=lam,
         hessian_intv=hessian_intv,

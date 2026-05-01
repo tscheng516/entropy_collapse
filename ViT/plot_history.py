@@ -1,6 +1,7 @@
 """
 plot_history.py — Re-run all post-training plots and analysis from a saved
 history.pkl file.
+Depreciated, base_train.py uses common/plot_histoy.py version instead.
 
 Usage
 -----
@@ -92,12 +93,47 @@ def _corr_rows(corr_dict: dict) -> list[list[str]]:
     return rows
 
 
+_WINDOW_LABELS = ["Whole", "Q1", "Q2", "Q3", "Q4"]
+
+
+def _corr_table_by_window(corr_by_window: dict, section: str) -> str:
+    """Build a Markdown table with Spearman and Pearson columns for each window."""
+    all_pairs: list[str] = []
+    seen: set[str] = set()
+    for lbl in _WINDOW_LABELS:
+        cd = corr_by_window.get(lbl, {}).get(section, {})
+        for pair in cd:
+            pair_clean = pair.strip()
+            if pair_clean not in seen:
+                seen.add(pair_clean)
+                all_pairs.append(pair_clean)
+    if not all_pairs:
+        return ""
+    headers = ["Pair"]
+    for lbl in _WINDOW_LABELS:
+        headers += [f"{lbl} Sp", f"{lbl} Pe"]
+    rows = []
+    for pair in all_pairs:
+        row = [pair]
+        for lbl in _WINDOW_LABELS:
+            cd = corr_by_window.get(lbl, {}).get(section, {})
+            val = next((v for k, v in cd.items() if k.strip() == pair), None)
+            if isinstance(val, dict):
+                row.append(f"{val['spearman']:.4f}")
+                row.append(f"{val['pearson']:.4f}")
+            else:
+                row.append("n/a")
+                row.append("n/a")
+        rows.append(row)
+    return _md_table(headers, rows)
+
+
 def _write_analysis_md(
     out_dir: str,
     run_label: str,
     pkl_path: str,
-    corr_results: dict,
-    spike_all: dict[float, dict],   # z → {proxy: result_dict}
+    corr_by_window: dict,
+    spike_all: dict[float, dict],
     lam: float,
     hessian_intv: int,
     entropy_intv: int,
@@ -116,7 +152,6 @@ def _write_analysis_md(
 
     if train_config:
         lines += ["## Training Configuration", ""]
-        # Group config fields by category for readability
         _cfg_groups = [
             ("Model", ["model_name", "pretrained", "num_classes", "img_size",
                         "depth", "num_heads", "embed_dim", "patch_size",
@@ -141,7 +176,6 @@ def _write_analysis_md(
             lines.append("")
             lines.append(_md_table(["Parameter", "Value"], group_rows))
             lines.append("")
-        # Any remaining keys not covered by the groups above
         covered = {k for _, keys in _cfg_groups for k in keys}
         extra_rows = [[k, str(v)] for k, v in sorted(train_config.items()) if k not in covered]
         if extra_rows:
@@ -150,48 +184,17 @@ def _write_analysis_md(
             lines.append(_md_table(["Parameter", "Value"], extra_rows))
             lines.append("")
 
-    proxy_display = {
-        "H vs Prec_H":           "H vs Prec_H",
-        "H vs H_VV":             "H vs H_VV",
-        "H vs GN":               "H vs GN",
-        "H vs Diag_H":           "H vs Diag_H",
-        "H vs Fisher":           "H vs Fisher",
-        "H vs KFAC":             "H vs KFAC",
-        "H vs FD":               "H vs FD",
-        "H vs BFGS":             "H vs BFGS",
-        "Prec_H vs H_VV":        "Prec_H vs H_VV",
-        "Prec_H vs GN":          "Prec_H vs GN",
-        "Prec_H vs Diag_H":      "Prec_H vs Diag_H",
-        "Prec_H vs Fisher":      "Prec_H vs Fisher",
-        "Prec_H vs KFAC":        "Prec_H vs KFAC",
-        "H vs Entropy(L0)":      "H vs Entropy(L0)",
-        "H vs Entropy(avg)":     "H vs Entropy(avg)",
-        "Prec_H vs Entropy(L0)": "Prec_H vs Entropy(L0)",
-        "Prec_H vs Entropy(avg)":"Prec_H vs Entropy(avg)",
-        "H_VV vs Entropy(L0)":   "H_VV vs Entropy(L0)",
-        "GN vs Entropy(L0)":     "GN vs Entropy(L0)",
-    }
+    raw_table = _corr_table_by_window(corr_by_window, "raw")
+    if raw_table:
+        lines += ["## Raw Correlations", "", raw_table, ""]
 
-    if corr_results.get("raw"):
-        lines += ["## Raw Correlations", ""]
-        rows = _corr_rows(corr_results["raw"])
-        if rows:
-            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
-        lines.append("")
+    smoothed_table = _corr_table_by_window(corr_by_window, "smoothed")
+    if smoothed_table:
+        lines += [f"## Smoothed Correlations (λ={lam})", "", smoothed_table, ""]
 
-    if corr_results.get("smoothed"):
-        lines += [f"## Smoothed Correlations (λ={lam})", ""]
-        rows = _corr_rows(corr_results["smoothed"])
-        if rows:
-            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
-        lines.append("")
-
-    if corr_results.get("entropy"):
-        lines += [f"## Proxy vs Entropy (smoothed, λ={lam})", ""]
-        rows = _corr_rows(corr_results["entropy"])
-        if rows:
-            lines.append(_md_table(["Pair", "Spearman", "Pearson"], rows))
-        lines.append("")
+    entropy_table = _corr_table_by_window(corr_by_window, "entropy")
+    if entropy_table:
+        lines += [f"## Proxy vs Entropy (smoothed, λ={lam})", "", entropy_table, ""]
 
     proxy_label_map = {
         "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",
@@ -204,7 +207,7 @@ def _write_analysis_md(
         for key, res in spike_results.items():
             label = proxy_label_map.get(key, key)
             p = res["P(Y_spike | X_spike)"]
-            p_str = f"{p:.3f}" if not (p != p) else "nan"   # nan check
+            p_str = f"{p:.3f}" if not (p != p) else "nan"
             rows.append([f"H vs {label}", str(res["n_X_spikes"]),
                          str(res["n_joint_spikes"]), p_str])
         if rows:
@@ -262,16 +265,28 @@ def plot_history(
     old_stdout = sys.stdout
     sys.stdout = tee
 
-    corr_results: dict = {}
+    corr_by_window: dict = {}
     spike_all: dict[float, dict] = {}
 
     try:
-        # --- Correlations ---
-        corr_results = print_correlations(
-            history, run_label, lam=lam, include_smooth=True,
-            skip_intv=skip_intv, hessian_intv=hessian_intv,
-            compute_fd=compute_fd,
-        )
+        # --- Correlations (whole history + four quarters) ---
+        cfg = history.get("config") or {}
+        max_iter = int(cfg.get("max_iters", n_iters) or n_iters)
+        q = max(max_iter // 4, 1)
+        _windows = [
+            ("Whole", 0,       -1),
+            ("Q1",    0,        q),
+            ("Q2",    q,    2 * q),
+            ("Q3",    2 * q, 3 * q),
+            ("Q4",    3 * q,   -1),
+        ]
+        for win_label, win_start, win_end in _windows:
+            corr_by_window[win_label] = print_correlations(
+                history, f"{run_label} [{win_label}]", lam=lam,
+                include_smooth=True, skip_intv=skip_intv,
+                hessian_intv=hessian_intv, compute_fd=compute_fd,
+                start=win_start, end=win_end,
+            )
 
         # --- Training dynamics ---
         lr_value = history.get("lr", [0.0])
@@ -336,7 +351,7 @@ def plot_history(
         out_dir=out_dir,
         run_label=run_label,
         pkl_path=pkl_path,
-        corr_results=corr_results,
+        corr_by_window=corr_by_window,
         spike_all=spike_all,
         lam=lam,
         hessian_intv=hessian_intv,
