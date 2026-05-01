@@ -397,41 +397,49 @@ if use_ddp:
 # ---------------------------------------------------------------------------
 def _build_optimizer(model_: torch.nn.Module) -> torch.optim.Optimizer:
     opt_name = cfg.optimizer.lower()
+    _raw = model_.module if use_ddp else model_
     if opt_name == "adamw":
-        decay_params = [
-            p for n, p in model_.named_parameters()
-            if p.requires_grad and p.ndim >= 2
-        ]
-        no_decay_params = [
-            p for n, p in model_.named_parameters()
-            if p.requires_grad and p.ndim < 2
-        ]
-        param_groups = [
-            {"params": decay_params, "weight_decay": cfg.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ]
-        opt = torch.optim.AdamW(
-            param_groups,
-            lr=cfg.learning_rate,
-            betas=(cfg.beta1, cfg.beta2),
-            eps=cfg.eps,
+        # Build param groups via nanochat's setup_optimizer so that scalar
+        # groups (embeddings, lm_head, resid/x0/smear/backout) keep their
+        # exact LRs, betas, and wd from gpt.py unchanged.  Only the Muon
+        # matrix groups are replaced with AdamW using cfg settings.
+        _ref_opt = _raw.setup_optimizer(
+            matrix_lr=cfg.learning_rate,
+            weight_decay=cfg.weight_decay,
         )
+        adamw_groups = []
+        for pg in _ref_opt.param_groups:
+            if pg.get("kind") == "muon":
+                # Replace Muon group with AdamW using cfg-controlled settings.
+                adamw_groups.append({
+                    "params": pg["params"],
+                    "lr": cfg.learning_rate,
+                    "betas": (cfg.beta1, cfg.beta2),
+                    "weight_decay": cfg.weight_decay,
+                    "eps": 1e-8,
+                })
+            else:
+                # Scalar AdamW group — preserve exact values from gpt.py.
+                adamw_groups.append({
+                    "params": pg["params"],
+                    "lr": pg["lr"],
+                    "betas": pg.get("betas", (0.8, 0.95)),
+                    "weight_decay": pg.get("weight_decay", 0.0),
+                    "eps": pg.get("eps", 1e-10),
+                })
+        opt = torch.optim.AdamW(adamw_groups)
         for pg in opt.param_groups:
             pg["initial_lr"] = pg["lr"]
         return opt
     elif opt_name == "muon_adamw":
         # Delegates to nanochat's model.setup_optimizer() which builds
         # MuonAdamW (or DistMuonAdamW for DDP) with per-group LRs.
-        # Each group stores group["initial_lr"] so the cosine schedule can
-        # scale all groups proportionally rather than overwriting them.
+        # Each group stores group["initial_lr"] so the trapezoidal schedule
+        # can scale all groups proportionally.
         # Note: prec_H (Adam-preconditioned Hessian) only works for the AdamW
         # param groups; Muon groups fall back to the raw Hessian value.
-        _raw = model_.module if use_ddp else model_
         return _raw.setup_optimizer(
-            matrix_lr=cfg.muon_matrix_lr,
-            embedding_lr=cfg.muon_embedding_lr,
-            unembedding_lr=cfg.muon_unembedding_lr,
-            scalar_lr=cfg.muon_scalar_lr,
+            matrix_lr=cfg.learning_rate,
             weight_decay=cfg.weight_decay,
         )
     else:
@@ -449,21 +457,24 @@ optimizer = _build_optimizer(model)
 def get_lr_multiplier(it: int) -> float:
     """Trapezoidal LR multiplier in [min_lr_frac, 1.0].
 
-    nanochat default: linear warmup → constant plateau → linear warmdown.
+    nanochat defaults: warmup_steps=40, warmdown_ratio=0.65, final_lr_frac=0.05.
     Multiply each param group's ``initial_lr`` by this value to get the
     actual LR for that step.
     """
-    warmdown_iters = round(cfg.warmdown_ratio * cfg.max_iters)
+    _warmup = 40
+    _warmdown_ratio = 0.65
+    _min_lr_frac = 0.05
+    warmdown_iters = round(_warmdown_ratio * cfg.max_iters)
     warmdown_start = cfg.max_iters - warmdown_iters
-    if it < cfg.warmup_iters:
-        # Linear warmup from min_lr_frac to 1.0
-        return cfg.min_lr_frac + (1.0 - cfg.min_lr_frac) * (it + 1) / max(1, cfg.warmup_iters)
+    if it < _warmup:
+        # Linear warmup from _min_lr_frac to 1.0
+        return _min_lr_frac + (1.0 - _min_lr_frac) * (it + 1) / max(1, _warmup)
     elif it < warmdown_start:
         return 1.0
     else:
-        # Linear warmdown from 1.0 to min_lr_frac
+        # Linear warmdown from 1.0 to _min_lr_frac
         progress = (cfg.max_iters - it) / max(1, warmdown_iters)
-        return cfg.min_lr_frac + (1.0 - cfg.min_lr_frac) * progress
+        return _min_lr_frac + (1.0 - _min_lr_frac) * progress
 
 
 def get_muon_momentum(it: int) -> float:
@@ -472,7 +483,7 @@ def get_muon_momentum(it: int) -> float:
     Ramps from 0.85 → 0.97 over the first 400 steps, stays at 0.97 through
     the plateau, then decays back to 0.90 during LR warmdown.
     """
-    warmdown_iters = round(cfg.warmdown_ratio * cfg.max_iters)
+    warmdown_iters = round(0.65 * cfg.max_iters)
     warmdown_start = cfg.max_iters - warmdown_iters
     if it < 400:
         frac = it / 400
@@ -599,7 +610,7 @@ for iter_num in range(iter_num, cfg.max_iters):
             if pg.get("kind") == "muon":
                 pg["momentum"]     = muon_mom
                 pg["weight_decay"] = muon_wd
-        lr = lrm * cfg.muon_matrix_lr  # representative value for logging
+        lr = lrm * cfg.learning_rate  # representative value for logging
     else:
         for pg in optimizer.param_groups:
             pg["lr"] = pg.get("initial_lr", pg["lr"]) * lrm
@@ -686,8 +697,6 @@ for iter_num in range(iter_num, cfg.max_iters):
             blk.attn.last_att = None  # free attention cache immediately
 
     loss.backward()
-    if cfg.grad_clip > 0.0:
-        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
     optimizer.step()
 
     loss_val = loss.item()
