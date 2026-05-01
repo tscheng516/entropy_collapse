@@ -199,7 +199,7 @@ class D8Config(TrainConfig):
 
     wandb_log: bool = True
     out_dir: str = "out/nanochat/d8"
-    wandb_project: str = "entropy-collapse-nanochat-d8"
+    wandb_project: str = "entropy-collapse-nanochat"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
     # max_iters calibrated for ratio=10 at 4 GPUs, B=8, T=512.
@@ -228,7 +228,7 @@ class D12Config(TrainConfig):
 
     out_dir: str = "out/nanochat/d12"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-nanochat-d12"
+    wandb_project: str = "entropy-collapse-nanochat"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
     batch_size: int = 8
@@ -262,7 +262,7 @@ class D24Config(TrainConfig):
 
     out_dir: str = "out/nanochat/d24"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-nanochat-d24"
+    wandb_project: str = "entropy-collapse-nanochat"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
     batch_size: int = 8
