@@ -692,15 +692,17 @@ def plot_training_dynamics(
     """
     Plot compact training dynamics for one or two runs.
 
-    Panels per run (3 columns):
+    Panels per run (2 columns):
         * Col 0 — train / eval loss
-        * Col 1 — train / eval accuracy (empty panel for LM runs — no accuracy)
-        * Col 2 — per-layer attention entropy
+        * Col 1 — per-layer attention entropy
+
+    The accuracy panel is omitted: nanochat trains a language model and
+    does not track token-level accuracy, so that subplot is always empty.
 
     Args:
         histories:    Dict mapping run name to a history dict with keys:
-                      ``loss``, ``val_loss``, optionally ``acc`` / ``train_acc``
-                      / ``val_acc``, and ``entropy`` (lists of per-layer floats).
+                      ``loss``, ``val_loss``, and ``entropy``
+                      (lists of per-layer floats).
         lrs:          Dict mapping run name to the peak LR used.
         save_path:    If provided, save the figure to this path.
         skip_intv:    If True (default), skip zero-placeholder rows in the
@@ -712,7 +714,7 @@ def plot_training_dynamics(
     """
     opt_names = list(histories.keys())
     n_rows = len(opt_names)
-    fig, axs = plt.subplots(n_rows, 3, figsize=(21, 4.8 * n_rows))
+    fig, axs = plt.subplots(n_rows, 2, figsize=(14, 4.8 * n_rows))
     if n_rows == 1:
         axs = axs[np.newaxis, :]
 
@@ -765,29 +767,8 @@ def plot_training_dynamics(
         ax_loss.legend(loc="upper right")
         ax_loss.grid(True, alpha=0.25, linestyle="--")
 
-        # --- Col 1: train/eval accuracy (LM runs leave this empty) ---
-        ax_acc = axs[row, 1]
-        train_acc = _as1d("acc", "train_acc")
-        if train_acc.size:
-            ax_acc.plot(train_acc, color=color, linewidth=2, label="train acc")
-        _sparse_or_dense(
-            h.get("val_acc", h.get("test_acc", [])),
-            dense_color="crimson", dense_label="val acc",
-            ax=ax_acc,
-        )
-        ax_acc.set_title("Accuracy")
-        ax_acc.set_xlabel("Iteration")
-        ax_acc.set_ylabel("Accuracy")
-        ax_acc.yaxis.set_major_formatter(
-            plt.matplotlib.ticker.PercentFormatter(xmax=1.0)
-            if (train_acc.size and train_acc.max() <= 1.0) else
-            plt.matplotlib.ticker.ScalarFormatter()
-        )
-        ax_acc.legend(loc="lower right")
-        ax_acc.grid(True, alpha=0.25, linestyle="--")
-
-        # --- Col 2: per-layer attention entropy ---
-        ax_ent = axs[row, 2]
+        # --- Col 1: per-layer attention entropy ---
+        ax_ent = axs[row, 1]
         raw_entropy = np.array(h.get("entropy", []))
         if skip_intv:
             entropies, ent_idx = _extract_positive_2d(raw_entropy)
