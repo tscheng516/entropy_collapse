@@ -289,8 +289,8 @@ def _write_analysis_md(
 def plot_history(
     pkl_path: str,
     out_dir: str | None = None,
-    hessian_intv: int = 500,
-    entropy_intv: int = 500,
+    hessian_intv: int = 50,
+    entropy_intv: int = 50,
     skip_intv: bool = True,
     lam: float = 10.0,
     compute_fd: bool = False,
