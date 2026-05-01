@@ -46,7 +46,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     out_dir: str = "out/pilot"
     eval_interval: int = 500
-    log_interval: int = 1
+    log_interval: int = 10
     checkpoint_interval: int = -1
     save_checkpoint: bool = False
     init_from: str = "scratch"
@@ -105,7 +105,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     optimizer: str = "adamw"            # 'adamw' | 'sgd'
     learning_rate: float = 3e-4
-    max_iters: int = 2000
+    max_iters: int = 100
     weight_decay: float = 0.05
     beta1: float = 0.9
     beta2: float = 0.999
@@ -124,7 +124,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Hessian metrics
     # ------------------------------------------------------------------ #
-    hessian_intv: int = 500
+    hessian_intv: int = 50
     # Compute all nine curvature proxies every N iterations.
     hessian_max_iter: int = 10
     # Power-iteration steps for λ_max estimation.
@@ -137,7 +137,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
-    entropy_intv: int = 500
+    entropy_intv: int = 50
     # Compute per-layer attention entropy every N iterations.
 
     # ------------------------------------------------------------------ #
