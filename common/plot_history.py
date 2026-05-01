@@ -2,30 +2,19 @@
 plot_history.py — Re-run all post-training plots and analysis from a saved
 history.pkl file.
 
-Shared by ViT/, ViT5/, ViT_depth/, and nanochat/.  Each folder's
-``plot_history.py`` is a thin CLI wrapper that imports ``plot_history()``
-from here with the correct ``task=`` argument.
+This module is the single canonical implementation used by every sub-project
+(ViT/, ViT5/, ViT_depth/, nanochat/).  The per-folder ``plot_history.py`` files
+are deprecated; all base_train scripts now import directly from here.
 
-Usage (from the relevant sub-folder wrapper)
----------------------------------------------
-Basic::
+Usage (standalone re-analysis)::
 
-    python ViT/plot_history.py          path/to/history.pkl
-    python ViT_depth/plot_history.py    path/to/history.pkl
-    python nanochat/plot_history.py     path/to/history.pkl
+    # from the project root or from common/
+    python common/plot_history.py  path/to/history.pkl
+    python common/plot_history.py  path/to/history.pkl --task depth
+    python common/plot_history.py  path/to/history.pkl --task lm --lam 10
 
-Custom output directory::
-
-    python ViT/plot_history.py path/to/history.pkl -o reanalysis/
-
-Override frequencies (default 500)::
-
-    python ViT/plot_history.py out/cifar100_vitb16/.../history.pkl \\
-        --hessian_intv 100 --entropy_intv 100
-
-Legacy carry-forward mode::
-
-    python ViT/plot_history.py path/to/history.pkl --no-skip-intv
+Outputs are written to the same directory as ``history.pkl`` by default.
+Use ``-o / --out-dir`` to redirect them elsewhere.
 """
 
 from __future__ import annotations
@@ -475,4 +464,30 @@ def build_arg_parser(description: str = "Re-run post-training analysis from hist
         "--compute-fd", action="store_true",
         help="Include BFGS and FD metrics (only if computed during training)",
     )
+    parser.add_argument(
+        "--task", type=str, default="classification",
+        choices=["classification", "depth", "lm"],
+        help="Task type: classification (ViT/ViT5), depth (ViT_depth), lm (nanochat). "
+             "Controls which config groups appear in the Markdown report. "
+             "(default: classification)",
+    )
     return parser
+
+
+def main() -> None:
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    plot_history(
+        pkl_path=args.pkl_path,
+        out_dir=args.out_dir,
+        hessian_intv=args.hessian_intv,
+        entropy_intv=args.entropy_intv,
+        skip_intv=not args.no_skip_intv,
+        lam=args.lam,
+        compute_fd=args.compute_fd,
+        task=args.task,
+    )
+
+
+if __name__ == "__main__":
+    main()
