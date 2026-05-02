@@ -458,6 +458,7 @@ def plot_curvature_smoothed_comparison(
     ]):
         _ax_s.set_title(_t_s, fontsize=16, fontweight="bold")
         _ax_s.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+        axs_s[1].minorticks_off()
         for _sp in _ax_s.spines.values():
             _sp.set_visible(True)
 
