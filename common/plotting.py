@@ -121,22 +121,19 @@ def plot_curvature_smoothed_comparison(
     compute_fd: bool = False,
 ) -> plt.Figure:
     """
-    Plot all nine spectral-norm curvature metrics (raw + smoothed) side-by-side.
+    1×3 figure: curvature traces | rolling Spearman | rolling Pearson.
 
-    Uses the same visual style as the training dynamics plot. Raw curves are
-    thin and semi-transparent; smoothed trends (via log-space Whittaker–Henderson
-    smoother) are thick and opaque overlaid on top.
+    Left panel
+        All spectral-norm curvature metrics plotted raw (thin) with a
+        log-space Whittaker–Henderson smoothed overlay (thick, semi-transparent).
 
-    The nine metrics are:
-      * hessian (H) — exact Hessian power iteration
-      * prec_h — Adam-preconditioned Hessian
-      * hessian_vv (H_VV) — value-projection subspace
-      * gn — Gauss-Newton
-      * bfgs — central-difference FD (only when compute_fd=True)
-      * fd — forward-difference FD (only when compute_fd=True)
-      * diag_h — max diagonal Hessian
-      * fisher — empirical Fisher
-      * kfac — K-FAC proxy
+    Middle / Right panels
+        Rolling-window Spearman (middle) and Pearson (right) correlation of
+        each proxy against the exact Hessian H, computed in a centred window
+        of 5 000 iterations (half-width = 2 500).  Both raw-scale (solid) and
+        log-scale (dashed) rolling correlations are overlaid on the same panel.
+        A horizontal line at the same style marks the corresponding whole-run
+        baseline for each proxy.
 
     Args:
         history:      Training history dict with curvature metric keys.
@@ -152,7 +149,9 @@ def plot_curvature_smoothed_comparison(
     Returns:
         The matplotlib ``Figure`` object.
     """
-    fig, ax = plt.subplots(figsize=(14, 8))
+    _ROLLING_HALF = 2500  # half-window width in iteration-index space
+
+    fig, (ax_left, ax_mid, ax_right) = plt.subplots(1, 3, figsize=(21, 8))
 
     def _as1d(key):
         val = history.get(key)
@@ -171,89 +170,62 @@ def plot_curvature_smoothed_comparison(
             vals = _carry_forward_positive(raw)
             return vals, np.arange(len(vals))
 
-    h_arr, h_idx = _prep("hessian")
-    if _has_positive_finite(h_arr):
-        ax.plot(h_idx, h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
-
-    prec_arr, prec_idx = _prep("prec_h")
-    if _has_positive_finite(prec_arr):
-        ax.plot(
-            prec_idx, prec_arr,
-            color="purple", linestyle="--", linewidth=2,
-            label=r"Precond. Hessian ($\tilde{H}$)",
-        )
-
-    gn_arr, gn_idx = _prep("gn")
-    if _has_positive_finite(gn_arr):
-        ax.plot(
-            gn_idx, gn_arr,
-            color="brown", linestyle="--", linewidth=2,
-            label=r"Gauss-Newton ($H^{GN}$)",
-        )
-
-    vv_arr, vv_idx = _prep("hessian_vv")
-    if _has_positive_finite(vv_arr):
-        ax.plot(
-            vv_idx, vv_arr,
-            color="magenta", linestyle=":", linewidth=2,
-            label=r"Value Subspace ($H_{VV}$)",
-        )
-
-    diag_arr, diag_idx = _prep("diag_h")
-    if _has_positive_finite(diag_arr):
-        ax.plot(
-            diag_idx, diag_arr,
-            color="teal", linestyle="-.", linewidth=2,
-            label="Diag Hessian",
-        )
-
+    h_arr,     h_idx     = _prep("hessian")
+    prec_arr,  prec_idx  = _prep("prec_h")
+    gn_arr,    gn_idx    = _prep("gn")
+    vv_arr,    vv_idx    = _prep("hessian_vv")
+    diag_arr,  diag_idx  = _prep("diag_h")
     fisher_arr, fisher_idx = _prep("fisher")
-    if _has_positive_finite(fisher_arr):
-        ax.plot(
-            fisher_idx, fisher_arr,
-            color="olive", linestyle="-.", linewidth=2,
-            label="Empirical Fisher",
-        )
-
+    kfac_arr,  kfac_idx  = _prep("kfac")
     if compute_fd:
         bfgs_arr, bfgs_idx = _prep("bfgs")
-        if _has_positive_finite(bfgs_arr):
-            ax.plot(
-                bfgs_idx, bfgs_arr,
-                color="navy", linestyle=":", linewidth=2,
-                label="BFGS",
-            )
-        elif _has_positive_finite(_as1d("bfgs")):
-            print("[warn] compute_fd=True but BFGS data has no positive values")
-
-        fd_arr, fd_idx = _prep("fd")
-        if _has_positive_finite(fd_arr):
-            ax.plot(
-                fd_idx, fd_arr,
-                color="cyan", linestyle="-.", linewidth=2,
-                label="FD",
-            )
-        elif _has_positive_finite(_as1d("fd")):
-            print("[warn] compute_fd=True but FD data has no positive values")
+        fd_arr,   fd_idx   = _prep("fd")
     else:
         bfgs_arr, bfgs_idx = np.array([]), np.array([], dtype=int)
-        fd_arr, fd_idx = np.array([]), np.array([], dtype=int)
+        fd_arr,   fd_idx   = np.array([]), np.array([], dtype=int)
 
-    kfac_arr, kfac_idx = _prep("kfac")
+    # ------------------------------------------------------------------
+    # Left panel — raw traces + smoothed overlays
+    # ------------------------------------------------------------------
+    ax = ax_left
+    if _has_positive_finite(h_arr):
+        ax.plot(h_idx, h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
+    if _has_positive_finite(prec_arr):
+        ax.plot(prec_idx, prec_arr, color="purple", linestyle="--", linewidth=2,
+                label=r"Precond. Hessian ($\tilde{H}$)")
+    if _has_positive_finite(gn_arr):
+        ax.plot(gn_idx, gn_arr, color="brown", linestyle="--", linewidth=2,
+                label=r"Gauss-Newton ($H^{GN}$)")
+    if _has_positive_finite(vv_arr):
+        ax.plot(vv_idx, vv_arr, color="magenta", linestyle=":", linewidth=2,
+                label=r"Value Subspace ($H_{VV}$)")
+    if _has_positive_finite(diag_arr):
+        ax.plot(diag_idx, diag_arr, color="teal", linestyle="-.", linewidth=2,
+                label="Diag Hessian")
+    if _has_positive_finite(fisher_arr):
+        ax.plot(fisher_idx, fisher_arr, color="olive", linestyle="-.", linewidth=2,
+                label="Empirical Fisher")
+    if compute_fd:
+        if _has_positive_finite(bfgs_arr):
+            ax.plot(bfgs_idx, bfgs_arr, color="navy", linestyle=":", linewidth=2,
+                    label="BFGS")
+        elif _has_positive_finite(_as1d("bfgs")):
+            print("[warn] compute_fd=True but BFGS data has no positive values")
+        if _has_positive_finite(fd_arr):
+            ax.plot(fd_idx, fd_arr, color="cyan", linestyle="-.", linewidth=2,
+                    label="FD")
+        elif _has_positive_finite(_as1d("fd")):
+            print("[warn] compute_fd=True but FD data has no positive values")
     if _has_positive_finite(kfac_arr):
-        ax.plot(
-            kfac_idx, kfac_arr,
-            color="darkgreen", linestyle=":", linewidth=2,
-            label="K-FAC",
-        )
+        ax.plot(kfac_idx, kfac_arr, color="darkgreen", linestyle=":", linewidth=2,
+                label="K-FAC")
 
-    _smooth_lam = lam
     _smooth_alpha = 0.45
     _smooth_lw = 5
 
     def _overlay_smooth(arr, idx, color):
         if arr.size >= 3:
-            trend, _, _ = smooth_log_trend(arr, lam=_smooth_lam, use_abs=True)
+            trend, _, _ = smooth_log_trend(arr, lam=lam, use_abs=True)
             ax.plot(idx, trend, color=color, linewidth=_smooth_lw, alpha=_smooth_alpha)
 
     if _has_positive_finite(h_arr):
@@ -275,14 +247,142 @@ def plot_curvature_smoothed_comparison(
     if _has_positive_finite(kfac_arr):
         _overlay_smooth(kfac_arr, kfac_idx, "darkgreen")
 
-    ax.set_yscale("log")
-    ax.set_title(f"All Curvature Metrics (λ_max) — Raw vs Smoothed (λ={lam})", fontsize=13)
     _xlabel = f"Iteration (every {hessian_intv})" if skip_intv and hessian_intv > 1 else "Iteration"
-    ax.set_xlabel(_xlabel, fontsize=12)
-    ax.set_ylabel("Spectral Norm (λ_max)", fontsize=12)
-    ax.legend(fontsize="small", loc="best")
+    ax.set_yscale("log")
+    ax.set_title(f"Curvature Metrics — Raw vs Smoothed (λ={lam})", fontsize=12)
+    ax.set_xlabel(_xlabel, fontsize=11)
+    ax.set_ylabel("Spectral Norm (λ_max)", fontsize=11)
+    ax.legend(fontsize="x-small", loc="best")
     ax.grid(True, alpha=0.3, linestyle="--")
 
+    # ------------------------------------------------------------------
+    # Rolling-window correlation helper  (raw scale or log scale)
+    # ------------------------------------------------------------------
+    def _rolling_corr_vs_h(p_arr, p_idx, log_space: bool = False):
+        """
+        Rolling Spearman & Pearson of H vs a proxy over 5k-iter windows.
+
+        If log_space=True, applies log to both series before computing
+        (only positions where both series are strictly positive are kept).
+        Returns (iters, spearman, pearson, whole_spearman, whole_pearson).
+        """
+        if not _has_positive_finite(h_arr) or not _has_positive_finite(p_arr):
+            return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
+        n = min(h_arr.size, p_arr.size)
+        if n < 3:
+            return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
+        h_use   = h_arr[:n].astype(float)
+        p_use   = p_arr[:n].astype(float)
+        idx_use = h_idx[:n]
+
+        if log_space:
+            valid = (h_use > 0) & (p_use > 0)
+            if valid.sum() < 3:
+                return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
+            h_use = np.where(valid, np.log(np.where(valid, h_use, 1.0)), np.nan)
+            p_use = np.where(valid, np.log(np.where(valid, p_use, 1.0)), np.nan)
+
+        # Whole-run correlation
+        mask_all = np.isfinite(h_use) & np.isfinite(p_use)
+        if mask_all.sum() >= 3:
+            sp_whole, _ = sp_stats.spearmanr(h_use[mask_all], p_use[mask_all])
+            pe_whole, _ = sp_stats.pearsonr(h_use[mask_all], p_use[mask_all])
+        else:
+            sp_whole = pe_whole = float("nan")
+
+        if idx_use.size == 0 or idx_use[-1] <= 2 * _ROLLING_HALF:
+            return np.array([]), np.array([]), np.array([]), sp_whole, pe_whole
+
+        roll_iters, roll_sp, roll_pe = [], [], []
+        for i in range(n):
+            center = idx_use[i]
+            if center < _ROLLING_HALF or center > idx_use[-1] - _ROLLING_HALF:
+                continue
+            lo = int(np.searchsorted(idx_use, center - _ROLLING_HALF))
+            hi = int(np.searchsorted(idx_use, center + _ROLLING_HALF, side="right"))
+            if hi - lo < 3:
+                continue
+            h_win = h_use[lo:hi]
+            p_win = p_use[lo:hi]
+            mask = np.isfinite(h_win) & np.isfinite(p_win)
+            if mask.sum() < 3:
+                continue
+            sp, _ = sp_stats.spearmanr(h_win[mask], p_win[mask])
+            pe, _ = sp_stats.pearsonr(h_win[mask], p_win[mask])
+            roll_iters.append(center)
+            roll_sp.append(sp)
+            roll_pe.append(pe)
+
+        return (np.asarray(roll_iters, dtype=float),
+                np.asarray(roll_sp, dtype=float),
+                np.asarray(roll_pe, dtype=float),
+                sp_whole, pe_whole)
+
+    # ------------------------------------------------------------------
+    # Middle and right panels — rolling correlations (H vs each proxy).
+    # Solid lines = raw scale; dashed lines = log scale (same colour).
+    # Thin horizontal lines mark the corresponding whole-run baseline.
+    # ------------------------------------------------------------------
+    _proxy_rolling = [
+        (prec_arr,   prec_idx,   "purple",    r"$\tilde{H}$"),
+        (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
+        (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
+        (diag_arr,   diag_idx,   "teal",      "Diag H"),
+        (fisher_arr, fisher_idx, "olive",     "Fisher"),
+        (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
+    ]
+    if compute_fd:
+        _proxy_rolling += [
+            (bfgs_arr, bfgs_idx, "navy", "BFGS"),
+            (fd_arr,   fd_idx,   "cyan", "FD"),
+        ]
+
+    for p_arr_r, p_idx_r, color_r, label_r in _proxy_rolling:
+        # Raw-scale rolling
+        iters_r, sp_r, pe_r, sp_w, pe_w = _rolling_corr_vs_h(
+            p_arr_r, p_idx_r, log_space=False
+        )
+        if iters_r.size > 0:
+            ax_mid.plot(iters_r, sp_r, color=color_r, linewidth=1.5,
+                        linestyle="-", label=label_r)
+            if not np.isnan(sp_w):
+                ax_mid.axhline(sp_w, color=color_r, linewidth=0.8,
+                               linestyle="-", alpha=0.4)
+            ax_right.plot(iters_r, pe_r, color=color_r, linewidth=1.5,
+                          linestyle="-", label=label_r)
+            if not np.isnan(pe_w):
+                ax_right.axhline(pe_w, color=color_r, linewidth=0.8,
+                                 linestyle="-", alpha=0.4)
+
+        # Log-scale rolling (same colour, dashed)
+        iters_l, sp_l, pe_l, sp_wl, pe_wl = _rolling_corr_vs_h(
+            p_arr_r, p_idx_r, log_space=True
+        )
+        if iters_l.size > 0:
+            ax_mid.plot(iters_l, sp_l, color=color_r, linewidth=1.5,
+                        linestyle="--", label=f"{label_r} (log)")
+            if not np.isnan(sp_wl):
+                ax_mid.axhline(sp_wl, color=color_r, linewidth=0.8,
+                               linestyle="--", alpha=0.4)
+            ax_right.plot(iters_l, pe_l, color=color_r, linewidth=1.5,
+                          linestyle="--", label=f"{label_r} (log)")
+            if not np.isnan(pe_wl):
+                ax_right.axhline(pe_wl, color=color_r, linewidth=0.8,
+                                 linestyle="--", alpha=0.4)
+
+    for _ax, _title, _ylabel in [
+        (ax_mid,   "Rolling Spearman ρ  (solid=raw, dashed=log)", "Spearman ρ"),
+        (ax_right, "Rolling Pearson r   (solid=raw, dashed=log)", "Pearson r"),
+    ]:
+        _ax.set_title(_title, fontsize=12)
+        _ax.set_xlabel(_xlabel, fontsize=11)
+        _ax.set_ylabel(_ylabel, fontsize=11)
+        _ax.axhline(0, color="black", linewidth=0.8, linestyle=":")
+        _ax.set_ylim(-1.05, 1.05)
+        _ax.legend(fontsize="x-small", loc="best")
+        _ax.grid(True, alpha=0.3, linestyle="--")
+
+    fig.suptitle(f"Curvature Analysis (λ_max) — λ={lam}", fontsize=13)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -449,62 +549,93 @@ def plot_all_spike_cooccurrences(
     compute_fd: bool = False,
 ) -> tuple[dict[str, plt.Figure], dict[str, dict]]:
     """
-    Compute MAD spike co-occurrence for lambda_max(H) versus each other proxy.
+    Compute MAD spike co-occurrence for H vs every proxy AND Prec_H vs every
+    other proxy.
+
+    Returns
+    -------
+    figs : dict keyed by ``"H.<proxy>"`` and ``"Prec_H.<proxy>"``.
+    results : nested dict ``{"H": {proxy_key: stats_dict, ...},
+                             "Prec_H": {proxy_key: stats_dict, ...}}``.
+        Each ``stats_dict`` has the same keys as ``plot_spike_cooccurrence``.
 
     Args:
         skip_intv:    If True (default), extract only positive finite values.
         hessian_intv: Hessian computation frequency (informational).
         compute_fd:   If False (default), skip BFGS and FD proxies.
-
-    Returns figures/results keyed by proxy name.
     """
-    h_raw = np.asarray(history.get("hessian", []), dtype=float).ravel()
-    if skip_intv:
-        h, h_idx = _extract_positive(h_raw)
-    else:
-        h = h_raw
-        h_idx = np.arange(len(h))
+    def _get_arr(key: str) -> np.ndarray:
+        raw = np.asarray(history.get(key, []), dtype=float).ravel()
+        if skip_intv:
+            arr, _ = _extract_positive(raw)
+        else:
+            arr = raw
+        return arr
 
-    proxy_specs = [
-        ("prec_h", "Prec_H", "hessian_prec"),
-        ("hessian_vv", "H_VV", "hessian_vv"),
-        ("gn", "GN", "hessian_gn"),
-        ("diag_h", "Diag_H", "hessian_diag"),
-        ("fisher", "Fisher", "hessian_fisher"),
-        ("kfac", "KFAC", "hessian_kfac"),
+    h      = _get_arr("hessian")
+    prec_h = _get_arr("prec_h")
+
+    # Proxy specs shared between H-ref and Prec_H-ref comparisons
+    _shared_proxies = [
+        ("hessian_vv", "H_VV",   "hessian_vv"),
+        ("gn",         "GN",     "hessian_gn"),
+        ("diag_h",     "Diag_H", "hessian_diag"),
+        ("fisher",     "Fisher", "hessian_fisher"),
+        ("kfac",       "KFAC",   "hessian_kfac"),
     ]
     if compute_fd:
-        proxy_specs.extend([
-            ("fd", "FD", "hessian_fd"),
+        _shared_proxies.extend([
+            ("fd",   "FD",   "hessian_fd"),
             ("bfgs", "BFGS", "hessian_bfgs"),
         ])
 
     figs: dict[str, plt.Figure] = {}
-    results: dict[str, dict] = {}
+    results: dict[str, dict] = {"H": {}, "Prec_H": {}}
 
-    for key, label, suffix in proxy_specs:
-        y_raw = np.asarray(history.get(key, []), dtype=float).ravel()
-        if skip_intv:
-            y, y_idx = _extract_positive(y_raw)
-        else:
-            y = y_raw
-        if h.size == 0 or y.size == 0:
-            continue
-        if not (_has_positive_finite(h) and _has_positive_finite(y)):
-            continue
-        n = min(h.size, y.size)
-        save_path = None
-        if save_dir is not None:
-            save_path = f"{save_dir}/spike_cooccurrence_H_vs_{suffix}_z{z_score}.png"
+    # ------------------------------------------------------------------
+    # H as reference — compare against Prec_H + all shared proxies
+    # ------------------------------------------------------------------
+    h_proxy_specs = [("prec_h", "Prec_H", "hessian_prec")] + _shared_proxies
+    if _has_positive_finite(h):
+        for key, label, suffix in h_proxy_specs:
+            y = _get_arr(key)
+            if y.size == 0 or not _has_positive_finite(y):
+                continue
+            n = min(h.size, y.size)
+            save_path = (
+                f"{save_dir}/spike_cooccurrence_H_vs_{suffix}_z{z_score}.png"
+                if save_dir is not None else None
+            )
+            fig, res = plot_spike_cooccurrence(
+                h[:n], y[:n],
+                x_name="H", y_name=label,
+                window=window, z_score=z_score,
+                log_scale=log_scale, save_path=save_path,
+            )
+            figs[f"H.{key}"] = fig
+            results["H"][key] = res
 
-        fig, res = plot_spike_cooccurrence(
-            h[:n], y[:n],
-            x_name="Exact H", y_name=label,
-            window=window, z_score=z_score,
-            log_scale=log_scale, save_path=save_path,
-        )
-        figs[key] = fig
-        results[key] = res
+    # ------------------------------------------------------------------
+    # Prec_H as reference — compare against all shared proxies
+    # ------------------------------------------------------------------
+    if _has_positive_finite(prec_h):
+        for key, label, suffix in _shared_proxies:
+            y = _get_arr(key)
+            if y.size == 0 or not _has_positive_finite(y):
+                continue
+            n = min(prec_h.size, y.size)
+            save_path = (
+                f"{save_dir}/spike_cooccurrence_PrecH_vs_{suffix}_z{z_score}.png"
+                if save_dir is not None else None
+            )
+            fig, res = plot_spike_cooccurrence(
+                prec_h[:n], y[:n],
+                x_name="Prec_H", y_name=label,
+                window=window, z_score=z_score,
+                log_scale=log_scale, save_path=save_path,
+            )
+            figs[f"Prec_H.{key}"] = fig
+            results["Prec_H"][key] = res
 
     return figs, results
 
@@ -573,7 +704,7 @@ def print_correlations(
         if not _has_positive_finite(fd) and not _has_positive_finite(bfgs):
             print("[warn] compute_fd=True but FD/BFGS data has no positive values")
 
-    results: dict = {"raw": {}, "smoothed": {}, "entropy": {}}
+    results: dict = {"raw": {}, "smoothed": {}, "log_raw": {}, "log_smoothed": {}, "entropy": {}}
 
     def _corr(a, b, label, store: dict | None = None):
         n = min(len(a), len(b))
@@ -617,6 +748,45 @@ def print_correlations(
             _corr(prec_h, fd,   "Prec_H vs FD     ", results["raw"])
             _corr(prec_h, bfgs, "Prec_H vs BFGS   ", results["raw"])
 
+    # --- Log-scale raw correlations ---
+    def _to_log(arr: np.ndarray) -> np.ndarray:
+        out = np.full(arr.shape, np.nan, dtype=float)
+        valid = np.isfinite(arr) & (arr > 0)
+        out[valid] = np.log(arr[valid])
+        return out
+
+    h_log      = _to_log(h)
+    prec_h_log = _to_log(prec_h)
+    vv_log     = _to_log(vv)
+    gn_log     = _to_log(gn)
+    diag_h_log = _to_log(diag_h)
+    fisher_log = _to_log(fisher)
+    kfac_log   = _to_log(kfac)
+
+    print(f"\n--- {name} Log-scale Raw Correlations (log H as reference) ---")
+    _corr(h_log, prec_h_log, "log H vs log Prec_H  ", results["log_raw"])
+    _corr(h_log, vv_log,     "log H vs log H_VV    ", results["log_raw"])
+    _corr(h_log, gn_log,     "log H vs log GN      ", results["log_raw"])
+    _corr(h_log, diag_h_log, "log H vs log Diag_H  ", results["log_raw"])
+    _corr(h_log, fisher_log, "log H vs log Fisher  ", results["log_raw"])
+    _corr(h_log, kfac_log,   "log H vs log KFAC    ", results["log_raw"])
+    if compute_fd:
+        fd_log   = _to_log(fd)
+        bfgs_log = _to_log(bfgs)
+        _corr(h_log, fd_log,   "log H vs log FD      ", results["log_raw"])
+        _corr(h_log, bfgs_log, "log H vs log BFGS    ", results["log_raw"])
+
+    if _has_positive_finite(prec_h):
+        print(f"\n--- {name} Log-scale Raw Correlations (log Prec_H as reference) ---")
+        _corr(prec_h_log, vv_log,     "log Prec_H vs log H_VV   ", results["log_raw"])
+        _corr(prec_h_log, gn_log,     "log Prec_H vs log GN     ", results["log_raw"])
+        _corr(prec_h_log, diag_h_log, "log Prec_H vs log Diag_H ", results["log_raw"])
+        _corr(prec_h_log, fisher_log, "log Prec_H vs log Fisher ", results["log_raw"])
+        _corr(prec_h_log, kfac_log,   "log Prec_H vs log KFAC   ", results["log_raw"])
+        if compute_fd:
+            _corr(prec_h_log, fd_log,   "log Prec_H vs log FD     ", results["log_raw"])
+            _corr(prec_h_log, bfgs_log, "log Prec_H vs log BFGS   ", results["log_raw"])
+
     if not include_smooth:
         return results
 
@@ -658,6 +828,39 @@ def print_correlations(
             _corr(prec_h_s, fd_s,   "Prec_H vs FD     ", results["smoothed"])
             _corr(prec_h_s, bfgs_s, "Prec_H vs BFGS   ", results["smoothed"])
 
+    # --- Log-scale smoothed correlations ---
+    h_s_log      = np.log(np.maximum(h_s,      1e-300)) if h_s.size > 0      else h_s
+    prec_h_s_log = np.log(np.maximum(prec_h_s, 1e-300)) if prec_h_s.size > 0 else prec_h_s
+    vv_s_log     = np.log(np.maximum(vv_s,     1e-300)) if vv_s.size > 0     else vv_s
+    gn_s_log     = np.log(np.maximum(gn_s,     1e-300)) if gn_s.size > 0     else gn_s
+    diag_h_s_log = np.log(np.maximum(diag_h_s, 1e-300)) if diag_h_s.size > 0 else diag_h_s
+    fisher_s_log = np.log(np.maximum(fisher_s, 1e-300)) if fisher_s.size > 0 else fisher_s
+    kfac_s_log   = np.log(np.maximum(kfac_s,   1e-300)) if kfac_s.size > 0   else kfac_s
+
+    print(f"\n--- {name} Log-scale Smoothed Correlations, log H reference (λ={lam}) ---")
+    _corr(h_s_log, prec_h_s_log, "log H vs log Prec_H  ", results["log_smoothed"])
+    _corr(h_s_log, vv_s_log,     "log H vs log H_VV    ", results["log_smoothed"])
+    _corr(h_s_log, gn_s_log,     "log H vs log GN      ", results["log_smoothed"])
+    _corr(h_s_log, diag_h_s_log, "log H vs log Diag_H  ", results["log_smoothed"])
+    _corr(h_s_log, fisher_s_log, "log H vs log Fisher  ", results["log_smoothed"])
+    _corr(h_s_log, kfac_s_log,   "log H vs log KFAC    ", results["log_smoothed"])
+    if compute_fd:
+        fd_s_log   = np.log(np.maximum(fd_s,   1e-300)) if fd_s.size > 0   else fd_s
+        bfgs_s_log = np.log(np.maximum(bfgs_s, 1e-300)) if bfgs_s.size > 0 else bfgs_s
+        _corr(h_s_log, fd_s_log,   "log H vs log FD      ", results["log_smoothed"])
+        _corr(h_s_log, bfgs_s_log, "log H vs log BFGS    ", results["log_smoothed"])
+
+    if _has_positive_finite(prec_h_s):
+        print(f"\n--- {name} Log-scale Smoothed Correlations, log Prec_H reference (λ={lam}) ---")
+        _corr(prec_h_s_log, vv_s_log,     "log Prec_H vs log H_VV   ", results["log_smoothed"])
+        _corr(prec_h_s_log, gn_s_log,     "log Prec_H vs log GN     ", results["log_smoothed"])
+        _corr(prec_h_s_log, diag_h_s_log, "log Prec_H vs log Diag_H ", results["log_smoothed"])
+        _corr(prec_h_s_log, fisher_s_log, "log Prec_H vs log Fisher ", results["log_smoothed"])
+        _corr(prec_h_s_log, kfac_s_log,   "log Prec_H vs log KFAC   ", results["log_smoothed"])
+        if compute_fd:
+            _corr(prec_h_s_log, fd_s_log,   "log Prec_H vs log FD     ", results["log_smoothed"])
+            _corr(prec_h_s_log, bfgs_s_log, "log Prec_H vs log BFGS   ", results["log_smoothed"])
+
     raw_ent = history.get("entropy", [])
     if raw_ent and len(raw_ent) > 0:
         ent_arr = np.array(raw_ent)[start:_end][::sample_every]
@@ -671,13 +874,20 @@ def print_correlations(
 
     if ent_first.size >= 3 and h_s.size >= 3:
         n = min(len(h_s), len(ent_first))
-        print(f"\n--- {name} Smoothed Proxy vs Entropy (λ={lam}) ---")
-        _corr(h_s[:n],      ent_first[:n], "H vs Entropy(L0)      ", results["entropy"])
-        _corr(h_s[:n],      ent_avg[:n],   "H vs Entropy(avg)     ", results["entropy"])
-        _corr(prec_h_s[:n], ent_first[:n], "Prec_H vs Entropy(L0) ", results["entropy"])
-        _corr(prec_h_s[:n], ent_avg[:n],   "Prec_H vs Entropy(avg)", results["entropy"])
-        _corr(vv_s[:n],     ent_first[:n], "H_VV vs Entropy(L0)   ", results["entropy"])
-        _corr(gn_s[:n],     ent_first[:n], "GN vs Entropy(L0)     ", results["entropy"])
+        _h_s_log = np.log(np.maximum(h_s, 1e-300))
+        print(f"\n--- {name} Log Proxy vs Entropy (smoothed log proxy, λ={lam}) ---")
+        _corr(_h_s_log[:n],      ent_first[:n], "log H vs Entropy(L0)      ", results["entropy"])
+        _corr(_h_s_log[:n],      ent_avg[:n],   "log H vs Entropy(avg)     ", results["entropy"])
+        if prec_h_s.size > 0:
+            _prec_h_s_log = np.log(np.maximum(prec_h_s, 1e-300))
+            _corr(_prec_h_s_log[:n], ent_first[:n], "log Prec_H vs Entropy(L0) ", results["entropy"])
+            _corr(_prec_h_s_log[:n], ent_avg[:n],   "log Prec_H vs Entropy(avg)", results["entropy"])
+        if vv_s.size > 0:
+            _vv_s_log = np.log(np.maximum(vv_s, 1e-300))
+            _corr(_vv_s_log[:n],     ent_first[:n], "log H_VV vs Entropy(L0)   ", results["entropy"])
+        if gn_s.size > 0:
+            _gn_s_log = np.log(np.maximum(gn_s, 1e-300))
+            _corr(_gn_s_log[:n],     ent_first[:n], "log GN vs Entropy(L0)     ", results["entropy"])
 
     return results
 

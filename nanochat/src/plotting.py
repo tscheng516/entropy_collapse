@@ -107,22 +107,19 @@ def plot_curvature_smoothed_comparison(
     compute_fd: bool = False,
 ) -> plt.Figure:
     """
-    Plot all nine spectral-norm curvature metrics (raw + smoothed) side-by-side.
+    1×3 figure: curvature traces | rolling Spearman | rolling Pearson.
 
-    Uses the same visual style as the training dynamics plot. Raw curves are
-    thin and semi-transparent; smoothed trends (via log-space Whittaker–Henderson
-    smoother) are thick and opaque overlaid on top.
+    Left panel
+        All spectral-norm curvature metrics plotted raw (thin) with a
+        log-space Whittaker–Henderson smoothed overlay (thick, semi-transparent).
 
-    The nine metrics are:
-      * hessian (H) — exact Hessian power iteration
-      * prec_h — Adam-preconditioned Hessian
-      * hessian_vv (H_VV) — value-projection subspace
-      * gn — Gauss-Newton
-      * bfgs — central-difference FD (only when compute_fd=True)
-      * fd — forward-difference FD (only when compute_fd=True)
-      * diag_h — max diagonal Hessian
-      * fisher — empirical Fisher
-      * kfac — K-FAC proxy
+    Middle / Right panels
+        Rolling-window Spearman (middle) and Pearson (right) correlation of
+        each proxy against the exact Hessian H, computed in a centred window
+        of 5 000 iterations (half-width = 2 500).  Both raw-scale (solid) and
+        log-scale (dashed) rolling correlations are overlaid on the same panel.
+        A horizontal line at the same style marks the corresponding whole-run
+        baseline for each proxy.
 
     Args:
         history:      Training history dict with curvature metric keys.
@@ -134,13 +131,13 @@ def plot_curvature_smoothed_comparison(
                       ``_carry_forward_positive`` step-function fill.
         hessian_intv: Hessian computation frequency (used for x-axis label).
         compute_fd:   If False (default), skip BFGS and FD metrics entirely.
-                      Set to True only if the training run had compute_fd
-                      enabled in its TrainConfig.
 
     Returns:
         The matplotlib ``Figure`` object.
     """
-    fig, ax = plt.subplots(figsize=(14, 8))
+    _ROLLING_HALF = 2500  # half-window width in iteration-index space
+
+    fig, (ax_left, ax_mid, ax_right) = plt.subplots(1, 3, figsize=(21, 8))
 
     def _as1d(key):
         val = history.get(key)
@@ -152,7 +149,6 @@ def plot_curvature_smoothed_comparison(
         return arr.ravel()
 
     def _prep(key):
-        """Return (values, x_indices) depending on skip_intv mode."""
         raw = _as1d(key)
         if skip_intv:
             return _extract_positive(raw)
@@ -160,107 +156,62 @@ def plot_curvature_smoothed_comparison(
             vals = _carry_forward_positive(raw)
             return vals, np.arange(len(vals))
 
-    # --- Plot all nine metrics (raw + smoothed) ---
-    h_arr, h_idx = _prep("hessian")
-    if _has_positive_finite(h_arr):
-        ax.plot(h_idx, h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
-
-    prec_arr, prec_idx = _prep("prec_h")
-    if _has_positive_finite(prec_arr):
-        ax.plot(
-            prec_idx, prec_arr,
-            color="purple",
-            linestyle="--",
-            linewidth=2,
-            label=r"Precond. Hessian ($\tilde{H}$)",
-        )
-
-    gn_arr, gn_idx = _prep("gn")
-    if _has_positive_finite(gn_arr):
-        ax.plot(
-            gn_idx, gn_arr,
-            color="brown",
-            linestyle="--",
-            linewidth=2,
-            label=r"Gauss-Newton ($H^{GN}$)",
-        )
-
-    vv_arr, vv_idx = _prep("hessian_vv")
-    if _has_positive_finite(vv_arr):
-        ax.plot(
-            vv_idx, vv_arr,
-            color="magenta",
-            linestyle=":",
-            linewidth=2,
-            label=r"Value Subspace ($H_{VV}$)",
-        )
-
-    diag_arr, diag_idx = _prep("diag_h")
-    if _has_positive_finite(diag_arr):
-        ax.plot(
-            diag_idx, diag_arr,
-            color="teal",
-            linestyle="-.",
-            linewidth=2,
-            label="Diag Hessian",
-        )
-
+    h_arr,      h_idx      = _prep("hessian")
+    prec_arr,   prec_idx   = _prep("prec_h")
+    gn_arr,     gn_idx     = _prep("gn")
+    vv_arr,     vv_idx     = _prep("hessian_vv")
+    diag_arr,   diag_idx   = _prep("diag_h")
     fisher_arr, fisher_idx = _prep("fisher")
-    if _has_positive_finite(fisher_arr):
-        ax.plot(
-            fisher_idx, fisher_arr,
-            color="olive",
-            linestyle="-.",
-            linewidth=2,
-            label="Empirical Fisher",
-        )
-
+    kfac_arr,   kfac_idx   = _prep("kfac")
     if compute_fd:
         bfgs_arr, bfgs_idx = _prep("bfgs")
-        if _has_positive_finite(bfgs_arr):
-            ax.plot(
-                bfgs_idx, bfgs_arr,
-                color="navy",
-                linestyle=":",
-                linewidth=2,
-                label="BFGS",
-            )
-        elif _has_positive_finite(_as1d("bfgs")):
-            print("[warn] compute_fd=True but BFGS data has no positive values — was compute_fd enabled during training?")
-
-        fd_arr, fd_idx = _prep("fd")
-        if _has_positive_finite(fd_arr):
-            ax.plot(
-                fd_idx, fd_arr,
-                color="cyan",
-                linestyle="-.",
-                linewidth=2,
-                label="FD",
-            )
-        elif _has_positive_finite(_as1d("fd")):
-            print("[warn] compute_fd=True but FD data has no positive values — was compute_fd enabled during training?")
+        fd_arr,   fd_idx   = _prep("fd")
     else:
         bfgs_arr, bfgs_idx = np.array([]), np.array([], dtype=int)
-        fd_arr, fd_idx = np.array([]), np.array([], dtype=int)
+        fd_arr,   fd_idx   = np.array([]), np.array([], dtype=int)
 
-    kfac_arr, kfac_idx = _prep("kfac")
+    # ------------------------------------------------------------------
+    # Left panel — raw traces + smoothed overlays
+    # ------------------------------------------------------------------
+    ax = ax_left
+    if _has_positive_finite(h_arr):
+        ax.plot(h_idx, h_arr, color="red", linewidth=2, label="Exact Hessian (H)")
+    if _has_positive_finite(prec_arr):
+        ax.plot(prec_idx, prec_arr, color="purple", linestyle="--", linewidth=2,
+                label=r"Precond. Hessian ($\tilde{H}$)")
+    if _has_positive_finite(gn_arr):
+        ax.plot(gn_idx, gn_arr, color="brown", linestyle="--", linewidth=2,
+                label=r"Gauss-Newton ($H^{GN}$)")
+    if _has_positive_finite(vv_arr):
+        ax.plot(vv_idx, vv_arr, color="magenta", linestyle=":", linewidth=2,
+                label=r"Value Subspace ($H_{VV}$)")
+    if _has_positive_finite(diag_arr):
+        ax.plot(diag_idx, diag_arr, color="teal", linestyle="-.", linewidth=2,
+                label="Diag Hessian")
+    if _has_positive_finite(fisher_arr):
+        ax.plot(fisher_idx, fisher_arr, color="olive", linestyle="-.", linewidth=2,
+                label="Empirical Fisher")
+    if compute_fd:
+        if _has_positive_finite(bfgs_arr):
+            ax.plot(bfgs_idx, bfgs_arr, color="navy", linestyle=":", linewidth=2,
+                    label="BFGS")
+        elif _has_positive_finite(_as1d("bfgs")):
+            print("[warn] compute_fd=True but BFGS data has no positive values")
+        if _has_positive_finite(fd_arr):
+            ax.plot(fd_idx, fd_arr, color="cyan", linestyle="-.", linewidth=2,
+                    label="FD")
+        elif _has_positive_finite(_as1d("fd")):
+            print("[warn] compute_fd=True but FD data has no positive values")
     if _has_positive_finite(kfac_arr):
-        ax.plot(
-            kfac_idx, kfac_arr,
-            color="darkgreen",
-            linestyle=":",
-            linewidth=2,
-            label="K-FAC",
-        )
+        ax.plot(kfac_idx, kfac_arr, color="darkgreen", linestyle=":", linewidth=2,
+                label="K-FAC")
 
-    # --- Smoothed trend overlays (Whittaker–Henderson in log-space) ---
-    _smooth_lam = lam
     _smooth_alpha = 0.45
     _smooth_lw = 5
 
     def _overlay_smooth(arr, idx, color):
         if arr.size >= 3:
-            trend, _, _ = smooth_log_trend(arr, lam=_smooth_lam, use_abs=True)
+            trend, _, _ = smooth_log_trend(arr, lam=lam, use_abs=True)
             ax.plot(idx, trend, color=color, linewidth=_smooth_lw, alpha=_smooth_alpha)
 
     if _has_positive_finite(h_arr):
@@ -282,14 +233,142 @@ def plot_curvature_smoothed_comparison(
     if _has_positive_finite(kfac_arr):
         _overlay_smooth(kfac_arr, kfac_idx, "darkgreen")
 
-    ax.set_yscale("log")
-    ax.set_title(f"All Curvature Metrics (λ_max) — Raw vs Smoothed (λ={lam})", fontsize=13)
     _xlabel = f"Iteration (every {hessian_intv})" if skip_intv and hessian_intv > 1 else "Iteration"
-    ax.set_xlabel(_xlabel, fontsize=12)
-    ax.set_ylabel("Spectral Norm (λ_max)", fontsize=12)
-    ax.legend(fontsize="small", loc="best")
+    ax.set_yscale("log")
+    ax.set_title(f"Curvature Metrics — Raw vs Smoothed (λ={lam})", fontsize=12)
+    ax.set_xlabel(_xlabel, fontsize=11)
+    ax.set_ylabel("Spectral Norm (λ_max)", fontsize=11)
+    ax.legend(fontsize="x-small", loc="best")
     ax.grid(True, alpha=0.3, linestyle="--")
 
+    # ------------------------------------------------------------------
+    # Rolling-window correlation helper  (raw scale or log scale)
+    # ------------------------------------------------------------------
+    def _rolling_corr_vs_h(p_arr, p_idx, log_space: bool = False):
+        """
+        Rolling Spearman & Pearson of H vs a proxy over 5k-iter windows.
+
+        If log_space=True, applies log to both series before computing
+        (only positions where both series are strictly positive are kept).
+        Returns (iters, spearman, pearson, whole_spearman, whole_pearson).
+        """
+        if not _has_positive_finite(h_arr) or not _has_positive_finite(p_arr):
+            return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
+        n = min(h_arr.size, p_arr.size)
+        if n < 3:
+            return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
+        h_use   = h_arr[:n].astype(float)
+        p_use   = p_arr[:n].astype(float)
+        idx_use = h_idx[:n]
+
+        if log_space:
+            valid = (h_use > 0) & (p_use > 0)
+            if valid.sum() < 3:
+                return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
+            h_use = np.where(valid, np.log(np.where(valid, h_use, 1.0)), np.nan)
+            p_use = np.where(valid, np.log(np.where(valid, p_use, 1.0)), np.nan)
+
+        # Whole-run correlation
+        mask_all = np.isfinite(h_use) & np.isfinite(p_use)
+        if mask_all.sum() >= 3:
+            sp_whole, _ = sp_stats.spearmanr(h_use[mask_all], p_use[mask_all])
+            pe_whole, _ = sp_stats.pearsonr(h_use[mask_all], p_use[mask_all])
+        else:
+            sp_whole = pe_whole = float("nan")
+
+        if idx_use.size == 0 or idx_use[-1] <= 2 * _ROLLING_HALF:
+            return np.array([]), np.array([]), np.array([]), sp_whole, pe_whole
+
+        roll_iters, roll_sp, roll_pe = [], [], []
+        for i in range(n):
+            center = idx_use[i]
+            if center < _ROLLING_HALF or center > idx_use[-1] - _ROLLING_HALF:
+                continue
+            lo = int(np.searchsorted(idx_use, center - _ROLLING_HALF))
+            hi = int(np.searchsorted(idx_use, center + _ROLLING_HALF, side="right"))
+            if hi - lo < 3:
+                continue
+            h_win = h_use[lo:hi]
+            p_win = p_use[lo:hi]
+            mask = np.isfinite(h_win) & np.isfinite(p_win)
+            if mask.sum() < 3:
+                continue
+            sp, _ = sp_stats.spearmanr(h_win[mask], p_win[mask])
+            pe, _ = sp_stats.pearsonr(h_win[mask], p_win[mask])
+            roll_iters.append(center)
+            roll_sp.append(sp)
+            roll_pe.append(pe)
+
+        return (np.asarray(roll_iters, dtype=float),
+                np.asarray(roll_sp, dtype=float),
+                np.asarray(roll_pe, dtype=float),
+                sp_whole, pe_whole)
+
+    # ------------------------------------------------------------------
+    # Middle and right panels — rolling correlations (H vs each proxy).
+    # Solid lines = raw scale; dashed lines = log scale (same colour).
+    # Thin horizontal lines mark the corresponding whole-run baseline.
+    # ------------------------------------------------------------------
+    _proxy_rolling = [
+        (prec_arr,   prec_idx,   "purple",    r"$\tilde{H}$"),
+        (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
+        (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
+        (diag_arr,   diag_idx,   "teal",      "Diag H"),
+        (fisher_arr, fisher_idx, "olive",     "Fisher"),
+        (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
+    ]
+    if compute_fd:
+        _proxy_rolling += [
+            (bfgs_arr, bfgs_idx, "navy", "BFGS"),
+            (fd_arr,   fd_idx,   "cyan", "FD"),
+        ]
+
+    for p_arr_r, p_idx_r, color_r, label_r in _proxy_rolling:
+        # Raw-scale rolling
+        iters_r, sp_r, pe_r, sp_w, pe_w = _rolling_corr_vs_h(
+            p_arr_r, p_idx_r, log_space=False
+        )
+        if iters_r.size > 0:
+            ax_mid.plot(iters_r, sp_r, color=color_r, linewidth=1.5,
+                        linestyle="-", label=label_r)
+            if not np.isnan(sp_w):
+                ax_mid.axhline(sp_w, color=color_r, linewidth=0.8,
+                               linestyle="-", alpha=0.4)
+            ax_right.plot(iters_r, pe_r, color=color_r, linewidth=1.5,
+                          linestyle="-", label=label_r)
+            if not np.isnan(pe_w):
+                ax_right.axhline(pe_w, color=color_r, linewidth=0.8,
+                                 linestyle="-", alpha=0.4)
+
+        # Log-scale rolling (same colour, dashed)
+        iters_l, sp_l, pe_l, sp_wl, pe_wl = _rolling_corr_vs_h(
+            p_arr_r, p_idx_r, log_space=True
+        )
+        if iters_l.size > 0:
+            ax_mid.plot(iters_l, sp_l, color=color_r, linewidth=1.5,
+                        linestyle="--", label=f"{label_r} (log)")
+            if not np.isnan(sp_wl):
+                ax_mid.axhline(sp_wl, color=color_r, linewidth=0.8,
+                               linestyle="--", alpha=0.4)
+            ax_right.plot(iters_l, pe_l, color=color_r, linewidth=1.5,
+                          linestyle="--", label=f"{label_r} (log)")
+            if not np.isnan(pe_wl):
+                ax_right.axhline(pe_wl, color=color_r, linewidth=0.8,
+                                 linestyle="--", alpha=0.4)
+
+    for _ax, _title, _ylabel in [
+        (ax_mid,   "Rolling Spearman ρ  (solid=raw, dashed=log)", "Spearman ρ"),
+        (ax_right, "Rolling Pearson r   (solid=raw, dashed=log)", "Pearson r"),
+    ]:
+        _ax.set_title(_title, fontsize=12)
+        _ax.set_xlabel(_xlabel, fontsize=11)
+        _ax.set_ylabel(_ylabel, fontsize=11)
+        _ax.axhline(0, color="black", linewidth=0.8, linestyle=":")
+        _ax.set_ylim(-1.05, 1.05)
+        _ax.legend(fontsize="x-small", loc="best")
+        _ax.grid(True, alpha=0.3, linestyle="--")
+
+    fig.suptitle(f"Curvature Analysis (λ_max) — λ={lam}", fontsize=13)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")

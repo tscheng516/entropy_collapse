@@ -28,6 +28,7 @@ import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Path bootstrap — ensure the project root is on sys.path so that
@@ -249,31 +250,67 @@ def _write_analysis_md(
     if raw_table:
         lines += ["## Raw Correlations", "", raw_table, ""]
 
+    log_raw_table = _corr_table_by_window(corr_by_window, "log_raw")
+    if log_raw_table:
+        lines += ["## Log-scale Raw Correlations", "", log_raw_table, ""]
+
     smoothed_table = _corr_table_by_window(corr_by_window, "smoothed")
     if smoothed_table:
         lines += [f"## Smoothed Correlations (λ={lam})", "", smoothed_table, ""]
 
+    log_smoothed_table = _corr_table_by_window(corr_by_window, "log_smoothed")
+    if log_smoothed_table:
+        lines += [f"## Log-scale Smoothed Correlations (λ={lam})", "", log_smoothed_table, ""]
+
     entropy_table = _corr_table_by_window(corr_by_window, "entropy")
     if entropy_table:
-        lines += [f"## Proxy vs Entropy (smoothed, λ={lam})", "", entropy_table, ""]
+        lines += [f"## Log Proxy vs Entropy (λ={lam})", "", entropy_table, ""]
 
     proxy_label_map = {
         "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",
         "diag_h": "Diag_H", "fisher": "Fisher", "bfgs": "BFGS",
         "fd": "FD", "kfac": "KFAC",
     }
+
+    def _spike_rows(ref_dict: dict, ref_name: str) -> list[list[str]]:
+        rows = []
+        for key, res in ref_dict.items():
+            label = proxy_label_map.get(key, key)
+            p     = res["P(Y_spike | X_spike)"]
+            base  = res["baseline_P(Y_spike)"]
+            p_str    = f"{p:.3f}"    if not np.isnan(p)    else "nan"
+            base_str = f"{base:.3f}" if not np.isnan(base) else "nan"
+            rows.append([
+                f"{ref_name} vs {label}",
+                str(res["n_X_spikes"]),
+                str(res["n_joint_spikes"]),
+                p_str,
+                base_str,
+            ])
+        return rows
+
     for z, spike_results in sorted(spike_all.items()):
         lines += [f"## Spike Co-occurrence (z={z})", ""]
-        rows = []
-        for key, res in spike_results.items():
-            label = proxy_label_map.get(key, key)
-            p = res["P(Y_spike | X_spike)"]
-            p_str = f"{p:.3f}" if not (p != p) else "nan"
-            rows.append([f"H vs {label}", str(res["n_X_spikes"]),
-                         str(res["n_joint_spikes"]), p_str])
-        if rows:
-            lines.append(_md_table(["Pair", "n_H_spikes", "n_joint", "P(Y|X spike)"], rows))
-        lines.append("")
+
+        h_rows = _spike_rows(spike_results.get("H", {}), "H")
+        if h_rows:
+            lines.append("### H as Reference")
+            lines.append("")
+            lines.append(_md_table(
+                ["Pair", "n_X_spikes", "n_joint", "P(Y|X spike)", "baseline P(Y spike)"],
+                h_rows,
+            ))
+            lines.append("")
+
+        prec_h_rows = _spike_rows(spike_results.get("Prec_H", {}), "Prec_H")
+        if prec_h_rows:
+            lines.append("### Prec_H as Reference")
+            lines.append("")
+            lines.append(_md_table(
+                ["Pair", "n_X_spikes", "n_joint", "P(Y|X spike)", "baseline P(Y spike)"],
+                prec_h_rows,
+            ))
+            lines.append("")
 
     md_path = os.path.join(out_dir, "analysis.md")
     with open(md_path, "w") as f:
@@ -382,7 +419,7 @@ def plot_history(
         plt.close(fig_smooth)
         print("[plot] curvature_smoothed_comparison.png")
 
-        # --- Spike co-occurrence ---
+        # --- Spike co-occurrence (computation kept; PNGs disabled) ---
         proxy_label = {
             "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",
             "fd": "FD", "diag_h": "Diag_H", "fisher": "Fisher",
@@ -391,19 +428,21 @@ def plot_history(
         for z in (1.5, 2.0):
             spike_figs, spike_results = plot_all_spike_cooccurrences(
                 history, window=15, z_score=z, log_scale=True,
-                save_dir=out_dir, skip_intv=skip_intv,
+                save_dir=None,  # PNG saving disabled; stats still computed
+                skip_intv=skip_intv,
                 hessian_intv=hessian_intv, compute_fd=compute_fd,
             )
             for fig_spike in spike_figs.values():
                 plt.close(fig_spike)
             spike_all[z] = spike_results
-            for key, res in spike_results.items():
-                label = proxy_label.get(key, key)
-                p = res["P(Y_spike | X_spike)"]
-                print(
-                    f"[spike z={z}] P({label} spike | H spike) = "
-                    f"{'nan' if p != p else f'{p:.3f}'}"
-                )
+            for ref_name, ref_results in spike_results.items():
+                for key, res in ref_results.items():
+                    label = proxy_label.get(key, key)
+                    p = res["P(Y_spike | X_spike)"]
+                    print(
+                        f"[spike z={z}] P({label} spike | {ref_name} spike) = "
+                        f"{'nan' if np.isnan(p) else f'{p:.3f}'}"
+                    )
 
         print(f"\n[plot_history] outputs saved to {out_dir}")
 
