@@ -121,19 +121,23 @@ def plot_curvature_smoothed_comparison(
     compute_fd: bool = False,
 ) -> plt.Figure:
     """
-    1×3 figure: curvature traces | rolling Spearman | rolling Pearson.
+    2×3 figure (GridSpec): curvature traces (left, spans both rows) |
+    raw rolling Spearman / Pearson (top middle / right) |
+    log rolling Spearman / Pearson (bottom middle / right).
 
-    Left panel
+    Left column (both rows)
         All spectral-norm curvature metrics plotted raw (thin) with a
         log-space Whittaker–Henderson smoothed overlay (thick, semi-transparent).
 
-    Middle / Right panels
-        Rolling-window Spearman (middle) and Pearson (right) correlation of
-        each proxy against the exact Hessian H, computed in a centred window
-        of 5 000 iterations (half-width = 2 500).  Both raw-scale (solid) and
-        log-scale (dashed) rolling correlations are overlaid on the same panel.
-        A horizontal line at the same style marks the corresponding whole-run
-        baseline for each proxy.
+    Top row — middle / right
+        Rolling-window Spearman and Pearson of H vs each proxy on the
+        *raw* scale, centred 5 000-iteration window (half-width = 2 500).
+
+    Bottom row — middle / right
+        Same rolling window but computed on log(H) vs log(proxy),
+        capturing magnitude-independent co-movement.
+
+    Dashed horizontal lines mark the corresponding whole-run baseline.
 
     Args:
         history:      Training history dict with curvature metric keys.
@@ -149,9 +153,16 @@ def plot_curvature_smoothed_comparison(
     Returns:
         The matplotlib ``Figure`` object.
     """
+    import matplotlib.gridspec as gridspec
     _ROLLING_HALF = 2500  # half-window width in iteration-index space
 
-    fig, (ax_left, ax_mid, ax_right) = plt.subplots(1, 3, figsize=(21, 8))
+    fig = plt.figure(figsize=(21, 12))
+    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.38, wspace=0.32)
+    ax_left = fig.add_subplot(gs[:, 0])   # curvature traces — spans both rows
+    ax_sp   = fig.add_subplot(gs[0, 1])   # raw Spearman
+    ax_pe   = fig.add_subplot(gs[0, 2])   # raw Pearson
+    ax_lsp  = fig.add_subplot(gs[1, 1])   # log Spearman
+    ax_lpe  = fig.add_subplot(gs[1, 2])   # log Pearson
 
     def _as1d(key):
         val = history.get(key)
@@ -319,9 +330,7 @@ def plot_curvature_smoothed_comparison(
                 sp_whole, pe_whole)
 
     # ------------------------------------------------------------------
-    # Middle and right panels — rolling correlations (H vs each proxy).
-    # Solid lines = raw scale; dashed lines = log scale (same colour).
-    # Thin horizontal lines mark the corresponding whole-run baseline.
+    # Correlation panels — raw scale (top row) and log scale (bottom row)
     # ------------------------------------------------------------------
     _proxy_rolling = [
         (prec_arr,   prec_idx,   "purple",    r"$\tilde{H}$"),
@@ -338,52 +347,52 @@ def plot_curvature_smoothed_comparison(
         ]
 
     for p_arr_r, p_idx_r, color_r, label_r in _proxy_rolling:
-        # Raw-scale rolling
+        # Raw-scale rolling → top row
         iters_r, sp_r, pe_r, sp_w, pe_w = _rolling_corr_vs_h(
             p_arr_r, p_idx_r, log_space=False
         )
         if iters_r.size > 0:
-            ax_mid.plot(iters_r, sp_r, color=color_r, linewidth=1.5,
-                        linestyle="-", label=label_r)
+            ax_sp.plot(iters_r, sp_r, color=color_r, linewidth=1.5, label=label_r)
             if not np.isnan(sp_w):
-                ax_mid.axhline(sp_w, color=color_r, linewidth=0.8,
-                               linestyle="-", alpha=0.4)
-            ax_right.plot(iters_r, pe_r, color=color_r, linewidth=1.5,
-                          linestyle="-", label=label_r)
+                ax_sp.axhline(sp_w, color=color_r, linewidth=0.8,
+                              linestyle="--", alpha=0.45)
+            ax_pe.plot(iters_r, pe_r, color=color_r, linewidth=1.5, label=label_r)
             if not np.isnan(pe_w):
-                ax_right.axhline(pe_w, color=color_r, linewidth=0.8,
-                                 linestyle="-", alpha=0.4)
+                ax_pe.axhline(pe_w, color=color_r, linewidth=0.8,
+                              linestyle="--", alpha=0.45)
 
-        # Log-scale rolling (same colour, dashed)
+        # Log-scale rolling → bottom row
         iters_l, sp_l, pe_l, sp_wl, pe_wl = _rolling_corr_vs_h(
             p_arr_r, p_idx_r, log_space=True
         )
         if iters_l.size > 0:
-            ax_mid.plot(iters_l, sp_l, color=color_r, linewidth=1.5,
-                        linestyle="--", label=f"{label_r} (log)")
+            ax_lsp.plot(iters_l, sp_l, color=color_r, linewidth=1.5, label=label_r)
             if not np.isnan(sp_wl):
-                ax_mid.axhline(sp_wl, color=color_r, linewidth=0.8,
-                               linestyle="--", alpha=0.4)
-            ax_right.plot(iters_l, pe_l, color=color_r, linewidth=1.5,
-                          linestyle="--", label=f"{label_r} (log)")
+                ax_lsp.axhline(sp_wl, color=color_r, linewidth=0.8,
+                               linestyle="--", alpha=0.45)
+            ax_lpe.plot(iters_l, pe_l, color=color_r, linewidth=1.5, label=label_r)
             if not np.isnan(pe_wl):
-                ax_right.axhline(pe_wl, color=color_r, linewidth=0.8,
-                                 linestyle="--", alpha=0.4)
+                ax_lpe.axhline(pe_wl, color=color_r, linewidth=0.8,
+                               linestyle="--", alpha=0.45)
 
     for _ax, _title, _ylabel in [
-        (ax_mid,   "Rolling Spearman ρ  (solid=raw, dashed=log)", "Spearman ρ"),
-        (ax_right, "Rolling Pearson r   (solid=raw, dashed=log)", "Pearson r"),
+        (ax_sp,  "Rolling Spearman ρ — H vs Proxy (raw)",      "Spearman ρ"),
+        (ax_pe,  "Rolling Pearson r — H vs Proxy (raw)",       "Pearson r"),
+        (ax_lsp, "Rolling Spearman ρ — log H vs log Proxy",    "Spearman ρ"),
+        (ax_lpe, "Rolling Pearson r — log H vs log Proxy",     "Pearson r"),
     ]:
-        _ax.set_title(_title, fontsize=12)
-        _ax.set_xlabel(_xlabel, fontsize=11)
-        _ax.set_ylabel(_ylabel, fontsize=11)
+        _ax.set_title(_title, fontsize=11)
+        _ax.set_xlabel(_xlabel, fontsize=10)
+        _ax.set_ylabel(_ylabel, fontsize=10)
         _ax.axhline(0, color="black", linewidth=0.8, linestyle=":")
         _ax.set_ylim(-1.05, 1.05)
         _ax.legend(fontsize="x-small", loc="best")
         _ax.grid(True, alpha=0.3, linestyle="--")
 
-    fig.suptitle(f"Curvature Analysis (λ_max) — λ={lam}", fontsize=13)
-    fig.tight_layout()
+    fig.suptitle(
+        f"Curvature Analysis (λ_max) — λ={lam}  |  5k-iter rolling window",
+        fontsize=13,
+    )
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     return fig
