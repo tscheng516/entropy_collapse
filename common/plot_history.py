@@ -409,7 +409,7 @@ def plot_history(
         print("[plot] training_dynamics.png")
 
         # --- Smoothed curvature comparison ---
-        fig_smooth = plot_curvature_smoothed_comparison(
+        fig_smooth, fig_simple = plot_curvature_smoothed_comparison(
             history, lam=lam,
             save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
             skip_intv=skip_intv,
@@ -418,7 +418,13 @@ def plot_history(
             compute_fd=compute_fd,
         )
         plt.close(fig_smooth)
+        fig_simple.savefig(
+            os.path.join(out_dir, "curvature_simple_comparison.pdf"),
+            bbox_inches="tight",
+        )
+        plt.close(fig_simple)
         print("[plot] curvature_smoothed_comparison.png")
+        print("[plot] curvature_simple_comparison.pdf")
 
         # --- Spike co-occurrence (computation kept; PNGs disabled) ---
         proxy_label = {

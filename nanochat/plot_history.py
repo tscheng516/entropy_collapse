@@ -268,7 +268,7 @@ def plot_history(
         plt.close(fig)
         print(f"[plot] training_dynamics.png")
 
-        fig_smooth = plot_curvature_smoothed_comparison(
+        fig_smooth, fig_simple = plot_curvature_smoothed_comparison(
             history, lam=lam,
             save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
             skip_intv=skip_intv,
@@ -277,7 +277,13 @@ def plot_history(
             compute_fd=compute_fd,
         )
         plt.close(fig_smooth)
+        fig_simple.savefig(
+            os.path.join(out_dir, "curvature_simple_comparison.pdf"),
+            bbox_inches="tight",
+        )
+        plt.close(fig_simple)
         print(f"[plot] curvature_smoothed_comparison.png")
+        print(f"[plot] curvature_simple_comparison.pdf")
 
         proxy_label = {
             "prec_h": "Prec_H", "hessian_vv": "H_VV", "gn": "GN",

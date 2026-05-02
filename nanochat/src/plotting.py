@@ -106,7 +106,7 @@ def plot_curvature_smoothed_comparison(
     hessian_intv: int = 1,
     entropy_intv: int = 1,
     compute_fd: bool = False,
-) -> plt.Figure:
+) -> tuple[plt.Figure, plt.Figure]:
     """
     2×4 figure: attention entropy | curvature traces | rolling Spearman | rolling Pearson
     (row 0 = raw / row 1 = smoothed / log-scale).
@@ -405,7 +405,47 @@ def plot_curvature_smoothed_comparison(
     )
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    return fig
+
+    # ------------------------------------------------------------------
+    # Simple comparison thumbnail (1×4)
+    # ------------------------------------------------------------------
+    fig_simple, axs_s = plt.subplots(1, 4, figsize=(20, 5))
+
+    # Panel 0: average smoothed entropy across layers
+    if entropies.ndim == 2 and entropies.shape[1] > 0:
+        ent_mean_raw = entropies.mean(axis=1)
+        if ent_mean_raw.size >= 3:
+            ent_mean_s, _, _ = smooth_log_trend(ent_mean_raw, lam=lam, use_abs=True)
+            axs_s[0].plot(ent_idx_arr, ent_mean_s, color="steelblue", linewidth=3)
+
+    # Panel 1: smoothed H (solid) and H_VV (dashed)
+    if _has_positive_finite(h_arr) and h_arr.size >= 3:
+        h_s, _, _ = smooth_log_trend(h_arr, lam=lam, use_abs=True)
+        axs_s[1].plot(h_idx, h_s, color="red", linewidth=3)
+    if _has_positive_finite(vv_arr) and vv_arr.size >= 3:
+        vv_s, _, _ = smooth_log_trend(vv_arr, lam=lam, use_abs=True)
+        axs_s[1].plot(vv_idx, vv_s, color="magenta", linewidth=3, linestyle="--")
+    axs_s[1].set_yscale("log")
+
+    # Panels 2 & 3: rolling log H_VV vs log H
+    iters_s, sp_s, pe_s, _, _ = _rolling_corr_vs_h(vv_arr, vv_idx, log_space=True)
+    if iters_s.size > 0:
+        axs_s[2].plot(iters_s, sp_s, color="darkblue", linewidth=3)
+        axs_s[3].plot(iters_s, pe_s, color="darkblue", linewidth=3)
+
+    for _ax_s, _t_s in zip(axs_s, [
+        "Attention Entropy",
+        "Exact Hessian\nand Proxies",
+        "Rolling Spearman\nof log Proxies",
+        "Rolling Pearson\nof log Proxies",
+    ]):
+        _ax_s.set_title(_t_s, fontsize=16, fontweight="bold")
+        _ax_s.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+        for _sp in _ax_s.spines.values():
+            _sp.set_visible(False)
+
+    fig_simple.tight_layout()
+    return fig, fig_simple
 
 
 # ======================================================================
