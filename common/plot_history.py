@@ -419,12 +419,12 @@ def plot_history(
         )
         plt.close(fig_smooth)
         fig_simple.savefig(
-            os.path.join(out_dir, "curvature_simple_comparison.pdf"),
+            os.path.join(out_dir, "curvature_simple_comparison.png"),
             bbox_inches="tight",
         )
         plt.close(fig_simple)
         print("[plot] curvature_smoothed_comparison.png")
-        print("[plot] curvature_simple_comparison.pdf")
+        print("[plot] curvature_simple_comparison.png")
 
         # --- Spike co-occurrence (computation kept; PNGs disabled) ---
         proxy_label = {

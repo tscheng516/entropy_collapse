@@ -421,9 +421,11 @@ def plot_curvature_smoothed_comparison(
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
     # ------------------------------------------------------------------
-    # Simple comparison thumbnail (1×4)
+    # Simple comparison thumbnail (1×4) -> (1x3)
     # ------------------------------------------------------------------
-    fig_simple, axs_s = plt.subplots(1, 4, figsize=(20, 5))
+    # fig_simple, axs_s = plt.subplots(1, 4, figsize=(20, 5))
+    fig_simple, axs_s = plt.subplots(1, 3, figsize=(20, 5))
+    
 
     # Panel 0: average smoothed entropy across layers
     if entropies.ndim == 2 and entropies.shape[1] > 0:
@@ -457,7 +459,7 @@ def plot_curvature_smoothed_comparison(
         _ax_s.set_title(_t_s, fontsize=16, fontweight="bold")
         _ax_s.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
         for _sp in _ax_s.spines.values():
-            _sp.set_visible(False)
+            _sp.set_visible(True)
 
     fig_simple.tight_layout()
     return fig, fig_simple
