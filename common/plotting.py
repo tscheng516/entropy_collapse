@@ -445,13 +445,14 @@ def plot_curvature_smoothed_comparison(
     iters_s, sp_s, pe_s, _, _ = _rolling_corr_vs_prec(vv_arr, vv_idx, log_space=True)
     if iters_s.size > 0:
         axs_s[2].plot(iters_s, sp_s, color="darkblue", linewidth=3)
-        axs_s[3].plot(iters_s, pe_s, color="darkblue", linewidth=3)
+        # axs_s[3].plot(iters_s, pe_s, color="darkblue", linewidth=3)
 
     for _ax_s, _t_s in zip(axs_s, [
         "Attention Entropy",
         "Preconditioned Hessian\nand Proxies",
-        "Rolling Spearman\nof log Proxies",
-        "Rolling Pearson\nof log Proxies",
+        "Rolling Correlation\nof log Proxies",
+        # "Rolling Spearman\nof log Proxies",
+        # "Rolling Pearson\nof log Proxies",
     ]):
         _ax_s.set_title(_t_s, fontsize=16, fontweight="bold")
         _ax_s.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
