@@ -273,6 +273,7 @@ def plot_history(
             save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
             skip_intv=skip_intv,
             hessian_intv=hessian_intv,
+            entropy_intv=entropy_intv,
             compute_fd=compute_fd,
         )
         plt.close(fig_smooth)
