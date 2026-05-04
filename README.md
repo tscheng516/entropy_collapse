@@ -15,7 +15,7 @@ This repository investigates the relationship between **attention entropy collap
 ## Result
 
 Attention Entropy is minimized when the Hessian and its proxies are maximized and correlated.
-![Figure](ViT/results/20260430-005608/curvature_simple_comparison.png)
+![Figure](ViT/results/20260502-145929/thumbnail.png)
 
 ---
 
