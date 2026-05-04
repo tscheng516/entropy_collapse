@@ -114,28 +114,27 @@ def _extract_positive_2d(matrix: np.ndarray | list) -> tuple[np.ndarray, np.ndar
 
 def plot_curvature_smoothed_comparison(
     history: dict,
-    lam: float = 100.0,
+    lam: float = 10.0,
     save_path: str | None = None,
     skip_intv: bool = True,
     hessian_intv: int = 1,
     entropy_intv: int = 1,
     compute_fd: bool = False,
+    vs_prec_H: bool = False,
 ) -> tuple[plt.Figure, plt.Figure]:
     """
-    2×4 figure: attention entropy | curvature traces | rolling Spearman | rolling Pearson
-    (row 0 = raw / row 1 = smoothed / log-scale).
+    2×3 figure: attention entropy | curvature traces | rolling Spearman
+    (row 0 = raw / row 1 = smoothed).
 
     Row 0 — raw:
         Col 0  Per-layer attention entropy (raw).
         Col 1  Raw curvature metric traces (log y-scale).
-        Col 2  Rolling Spearman ρ — Prec_H vs each proxy (raw scale).
-        Col 3  Rolling Pearson r  — Prec_H vs each proxy (raw scale).
+        Col 2  Rolling Spearman ρ — H (or Prec_H) vs each proxy (raw scale).
 
     Row 1 — smoothed:
         Col 0  Per-layer attention entropy smoothed with WH smoother.
         Col 1  Smoothed curvature traces (log y-scale).
-        Col 2  Rolling Spearman ρ — log Prec_H vs log proxy.
-        Col 3  Rolling Pearson r  — log Prec_H vs log proxy.
+        Col 2  Rolling Spearman ρ — smoothed H (or Prec_H) vs smoothed proxy.
 
     Dashed horizontal lines mark the corresponding whole-run correlation baseline.
 
@@ -150,23 +149,24 @@ def plot_curvature_smoothed_comparison(
         hessian_intv: Hessian computation frequency (used for x-axis label).
         entropy_intv: Entropy computation frequency (used for x-axis label).
         compute_fd:   If False (default), skip BFGS and FD metrics entirely.
+        vs_prec_H:    If True, use Prec_H as reference in col 2 rolling Spearman.
+                      If False (default), use exact Hessian (H) as reference.
 
     Returns:
-        The matplotlib ``Figure`` object.
+        (fig, fig_simple): the 2×3 figure and a simplified 1×3 thumbnail
+                           (second-row content with minimal styling).
     """
     import matplotlib.gridspec as gridspec
     _ROLLING_HALF = 2500  # half-window width in iteration-index space
 
-    fig = plt.figure(figsize=(28, 12))
-    gs = gridspec.GridSpec(2, 4, figure=fig, hspace=0.38, wspace=0.32)
+    fig = plt.figure(figsize=(21, 12))
+    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.38, wspace=0.32)
     ax_ent_raw    = fig.add_subplot(gs[0, 0])   # raw entropy (per layer)
     ax_raw        = fig.add_subplot(gs[0, 1])   # raw curvature traces
-    ax_sp         = fig.add_subplot(gs[0, 2])   # Prec_H vs proxy: raw Spearman
-    ax_pe         = fig.add_subplot(gs[0, 3])   # Prec_H vs proxy: raw Pearson
+    ax_sp         = fig.add_subplot(gs[0, 2])   # H/Prec_H vs proxy: raw Spearman
     ax_ent_smooth = fig.add_subplot(gs[1, 0])   # smoothed entropy (per layer)
     ax_smooth     = fig.add_subplot(gs[1, 1])   # smoothed curvature traces
-    ax_lsp        = fig.add_subplot(gs[1, 2])   # Prec_H vs proxy: log Spearman
-    ax_lpe        = fig.add_subplot(gs[1, 3])   # Prec_H vs proxy: log Pearson
+    ax_sp_smooth  = fig.add_subplot(gs[1, 2])   # smoothed H/Prec_H vs proxy: Spearman
 
     def _as1d(key):
         val = history.get(key)
@@ -294,22 +294,23 @@ def plot_curvature_smoothed_comparison(
     ax_smooth.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
-    # Rolling-window correlation helper — Prec_H as reference
+    # Rolling-window correlation helper — general reference
     # ------------------------------------------------------------------
-    def _rolling_corr_vs_prec(p_arr, p_idx, log_space: bool = False):
+    def _rolling_corr(ref_arr_rc, ref_idx_rc, p_arr_rc, p_idx_rc,
+                      log_space: bool = False):
         """
-        Rolling Spearman & Pearson of Prec_H vs a proxy over 5k-iter windows.
+        Rolling Spearman & Pearson of ref vs proxy over 5k-iter windows.
         If log_space=True, applies log to both series first.
         Returns (iters, spearman, pearson, whole_spearman, whole_pearson).
         """
-        if not _has_positive_finite(prec_arr) or not _has_positive_finite(p_arr):
+        if not _has_positive_finite(ref_arr_rc) or not _has_positive_finite(p_arr_rc):
             return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
-        n = min(prec_arr.size, p_arr.size)
+        n = min(ref_arr_rc.size, p_arr_rc.size)
         if n < 3:
             return np.array([]), np.array([]), np.array([]), float("nan"), float("nan")
-        ref_use = prec_arr[:n].astype(float)
-        p_use   = p_arr[:n].astype(float)
-        idx_use = prec_idx[:n]
+        ref_use = ref_arr_rc[:n].astype(float)
+        p_use   = p_arr_rc[:n].astype(float)
+        idx_use = ref_idx_rc[:n]
 
         if log_space:
             valid = (ref_use > 0) & (p_use > 0)
@@ -353,58 +354,78 @@ def plot_curvature_smoothed_comparison(
                 np.asarray(roll_pe,    dtype=float),
                 sp_whole, pe_whole)
 
-    # ------------------------------------------------------------------
-    # Correlation panels — Prec_H vs each proxy
-    # raw scale (top row) and log scale (bottom row)
-    # ------------------------------------------------------------------
-    _proxy_rolling = [
-        (h_arr,      h_idx,      "red",       "H"),
-        (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
-        (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
-        (diag_arr,   diag_idx,   "teal",      "Diag H"),
-        (fisher_arr, fisher_idx, "olive",     "Fisher"),
-        (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
-    ]
+    # Reference series for col 2 panels
+    ref_arr_raw = prec_arr if vs_prec_H else h_arr
+    ref_idx_raw = prec_idx if vs_prec_H else h_idx
+    _ref_label  = r"$\tilde{H}$" if vs_prec_H else "H"
+
+    # Smoothed reference
+    if _has_positive_finite(ref_arr_raw) and ref_arr_raw.size >= 3:
+        ref_arr_smooth, _, _ = smooth_log_trend(ref_arr_raw, lam=lam, use_abs=True)
+    else:
+        ref_arr_smooth = ref_arr_raw.copy()
+
+    # Proxy list — excludes the reference itself
+    if vs_prec_H:
+        _proxy_rolling = [
+            (h_arr,      h_idx,      "red",       "H"),
+            (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
+            (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
+            (diag_arr,   diag_idx,   "teal",      "Diag H"),
+            (fisher_arr, fisher_idx, "olive",     "Fisher"),
+            (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
+        ]
+    else:
+        _proxy_rolling = [
+            (prec_arr,   prec_idx,   "purple",    r"$\tilde{H}$"),
+            (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
+            (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
+            (diag_arr,   diag_idx,   "teal",      "Diag H"),
+            (fisher_arr, fisher_idx, "olive",     "Fisher"),
+            (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
+        ]
     if compute_fd:
         _proxy_rolling += [
             (bfgs_arr, bfgs_idx, "navy", "BFGS"),
             (fd_arr,   fd_idx,   "cyan", "FD"),
         ]
 
+    # Collect smoothed rolling Spearman results for reuse in fig_simple
+    _smooth_rolling_results: list[tuple] = []
+
+    # ------------------------------------------------------------------
+    # Col 2 row 0 — raw rolling Spearman (reference vs proxies, raw scale)
+    # Col 2 row 1 — smoothed rolling Spearman (smoothed ref vs smoothed proxies)
+    # ------------------------------------------------------------------
     for p_arr_r, p_idx_r, color_r, label_r in _proxy_rolling:
-        # Raw-scale rolling → top row
-        iters_r, sp_r, pe_r, sp_w, pe_w = _rolling_corr_vs_prec(
-            p_arr_r, p_idx_r, log_space=False
+        # Raw rolling → top row
+        iters_r, sp_r, _, sp_w, _ = _rolling_corr(
+            ref_arr_raw, ref_idx_raw, p_arr_r, p_idx_r, log_space=False
         )
         if iters_r.size > 0:
             ax_sp.plot(iters_r, sp_r, color=color_r, linewidth=1.5, label=label_r)
             if not np.isnan(sp_w):
                 ax_sp.axhline(sp_w, color=color_r, linewidth=0.8,
                               linestyle="--", alpha=0.45)
-            ax_pe.plot(iters_r, pe_r, color=color_r, linewidth=1.5, label=label_r)
-            if not np.isnan(pe_w):
-                ax_pe.axhline(pe_w, color=color_r, linewidth=0.8,
-                              linestyle="--", alpha=0.45)
 
-        # Log-scale rolling → bottom row
-        iters_l, sp_l, pe_l, sp_wl, pe_wl = _rolling_corr_vs_prec(
-            p_arr_r, p_idx_r, log_space=True
+        # Smoothed rolling → bottom row
+        if _has_positive_finite(p_arr_r) and p_arr_r.size >= 3:
+            p_arr_smooth, _, _ = smooth_log_trend(p_arr_r, lam=lam, use_abs=True)
+        else:
+            p_arr_smooth = p_arr_r.copy()
+        iters_s, sp_s, _, sp_ws, _ = _rolling_corr(
+            ref_arr_smooth, ref_idx_raw, p_arr_smooth, p_idx_r, log_space=False
         )
-        if iters_l.size > 0:
-            ax_lsp.plot(iters_l, sp_l, color=color_r, linewidth=1.5, label=label_r)
-            if not np.isnan(sp_wl):
-                ax_lsp.axhline(sp_wl, color=color_r, linewidth=0.8,
-                               linestyle="--", alpha=0.45)
-            ax_lpe.plot(iters_l, pe_l, color=color_r, linewidth=1.5, label=label_r)
-            if not np.isnan(pe_wl):
-                ax_lpe.axhline(pe_wl, color=color_r, linewidth=0.8,
-                               linestyle="--", alpha=0.45)
+        if iters_s.size > 0:
+            ax_sp_smooth.plot(iters_s, sp_s, color=color_r, linewidth=1.5, label=label_r)
+            if not np.isnan(sp_ws):
+                ax_sp_smooth.axhline(sp_ws, color=color_r, linewidth=0.8,
+                                     linestyle="--", alpha=0.45)
+        _smooth_rolling_results.append((iters_s, sp_s, color_r))
 
     for _ax, _title, _ylabel in [
-        (ax_sp,  r"Rolling Spearman ρ — $\tilde{H}$ vs Proxy (raw)",    "Spearman ρ"),
-        (ax_pe,  r"Rolling Pearson r — $\tilde{H}$ vs Proxy (raw)",     "Pearson r"),
-        (ax_lsp, r"Rolling Spearman ρ — log $\tilde{H}$ vs log Proxy",  "Spearman ρ"),
-        (ax_lpe, r"Rolling Pearson r — log $\tilde{H}$ vs log Proxy",   "Pearson r"),
+        (ax_sp,        rf"Rolling Spearman ρ — {_ref_label} vs Proxy (raw)",      "Spearman ρ"),
+        (ax_sp_smooth, rf"Rolling Spearman ρ — {_ref_label} vs Proxy (smoothed)", "Spearman ρ"),
     ]:
         _ax.set_title(_title, fontsize=11)
         _ax.set_xlabel(_xlabel, fontsize=10)
@@ -421,44 +442,40 @@ def plot_curvature_smoothed_comparison(
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
     # ------------------------------------------------------------------
-    # Simple comparison thumbnail (1×4) -> (1x3)
+    # Simple comparison thumbnail (1×3) — second row of the 2×3 figure
     # ------------------------------------------------------------------
-    # fig_simple, axs_s = plt.subplots(1, 4, figsize=(20, 5))
     fig_simple, axs_s = plt.subplots(1, 3, figsize=(20, 5))
-    
 
-    # Panel 0: average smoothed entropy across layers
+    # Panel 0: smoothed attention entropy (per layer)
     if entropies.ndim == 2 and entropies.shape[1] > 0:
-        ent_mean_raw = entropies.mean(axis=1)
-        if ent_mean_raw.size >= 3:
-            ent_mean_s, _, _ = smooth_log_trend(ent_mean_raw, lam=lam, use_abs=True)
-            axs_s[0].plot(ent_idx_arr, ent_mean_s, color="steelblue", linewidth=3)
+        n_layers_s = entropies.shape[1]
+        colors_ent_s = plt.cm.viridis(np.linspace(0, 1, n_layers_s))
+        for li in range(n_layers_s):
+            if entropies[:, li].size >= 3:
+                trend_ent_s, _, _ = smooth_log_trend(entropies[:, li], lam=lam, use_abs=True)
+                axs_s[0].plot(ent_idx_arr, trend_ent_s, color=colors_ent_s[li], linewidth=3)
 
-    # Panel 1: smoothed Prec_H (solid) and H_VV (dashed)
-    if _has_positive_finite(prec_arr) and prec_arr.size >= 3:
-        prec_s, _, _ = smooth_log_trend(prec_arr, lam=lam, use_abs=True)
-        axs_s[1].plot(prec_idx, prec_s, color="purple", linewidth=3)
-    if _has_positive_finite(vv_arr) and vv_arr.size >= 3:
-        vv_s, _, _ = smooth_log_trend(vv_arr, lam=lam, use_abs=True)
-        axs_s[1].plot(vv_idx, vv_s, color="magenta", linewidth=3, linestyle="--")
+    # Panel 1: smoothed curvature metrics
+    for arr, idx, color, ls, label in _metric_specs:
+        if _has_positive_finite(arr) and arr.size >= 3:
+            trend, _, _ = smooth_log_trend(arr, lam=lam, use_abs=True)
+            axs_s[1].plot(idx, trend, color=color, linestyle=ls, linewidth=2)
     axs_s[1].set_yscale("log")
+    axs_s[1].minorticks_off()
 
-    # Panels 2 & 3: rolling log H_VV vs log Prec_H
-    iters_s, sp_s, pe_s, _, _ = _rolling_corr_vs_prec(vv_arr, vv_idx, log_space=True)
-    if iters_s.size > 0:
-        axs_s[2].plot(iters_s, sp_s, color="darkblue", linewidth=3)
-        # axs_s[3].plot(iters_s, pe_s, color="darkblue", linewidth=3)
+    # Panel 2: rolling Spearman of smoothed reference vs smoothed proxies
+    for iters_s2, sp_s2, color_r in _smooth_rolling_results:
+        if iters_s2.size > 0:
+            axs_s[2].plot(iters_s2, sp_s2, color=color_r, linewidth=3)
 
+    _ref_title = r"$\tilde{H}$" if vs_prec_H else "H"
     for _ax_s, _t_s in zip(axs_s, [
         "Attention Entropy",
-        "Preconditioned Hessian\nand Proxies",
-        "Rolling Correlation\nof log Proxies",
-        # "Rolling Spearman\nof log Proxies",
-        # "Rolling Pearson\nof log Proxies",
+        "Curvature Metrics",
+        f"Rolling Spearman\n({_ref_title} vs Proxies)",
     ]):
         _ax_s.set_title(_t_s, fontsize=16, fontweight="bold")
         _ax_s.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
-        axs_s[1].minorticks_off()
         for _sp in _ax_s.spines.values():
             _sp.set_visible(True)
 

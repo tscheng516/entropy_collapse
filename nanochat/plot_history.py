@@ -1,26 +1,33 @@
 """
 plot_history.py — Re-run all post-training plots and analysis from a saved
-history.pkl file. 
-Deprecated, base_train.py uses common/plot_histoy.py version instead.
+history.pkl file.
+DEPRECATED — base_train.py now calls ``common.plot_history.plot_history``
+directly with ``task="lm"``.  For standalone re-analysis prefer:
 
-Usage
------
+    python common/plot_history.py path/to/history.pkl --task lm
+
+This file is kept for reference only and still works via the local
+``src.plotting`` helpers (LM-specific 2-col layout).  New callers should
+use ``common/plot_history.py``.
+
+Usage (legacy)
+--------------
 Basic (output goes next to the .pkl file)::
 
-    python plot_history.py path/to/history.pkl
+    python nanochat/plot_history.py path/to/history.pkl
 
 Custom output directory::
 
-    python plot_history.py path/to/history.pkl -o reanalysis/
+    python nanochat/plot_history.py path/to/history.pkl -o reanalysis/
 
 Override frequencies (default 500)::
 
-    python plot_history.py out/nanochat/d12/.../history.pkl \\
+    python nanochat/plot_history.py out/nanochat/d12/.../history.pkl \\
         --hessian_intv 500 --entropy_intv 100
 
 Legacy carry-forward mode::
 
-    python plot_history.py path/to/history.pkl --no-skip-intv
+    python nanochat/plot_history.py path/to/history.pkl --no-skip-intv
 """
 
 from __future__ import annotations
