@@ -243,9 +243,9 @@ def plot_raw(
             ax_curv.plot(idx, arr, color=color, linestyle=ls,
                          linewidth=1.5, label=label)
     ax_curv.set_yscale("log")
-    ax_curv.set_title("Raw Curvature Metrics", fontsize=11)
+    ax_curv.set_title("Spectral Norm of Hessian and Proxies", fontsize=11)
     ax_curv.set_xlabel(_xlabel, fontsize=10)
-    ax_curv.set_ylabel("Spectral Norm (λ_max)", fontsize=10)
+    # ax_curv.set_ylabel("Spectral Norm (λ_max)", fontsize=10)
     ax_curv.legend(fontsize="medium", loc="best")
     ax_curv.grid(True, alpha=0.3, linestyle="--")
 
@@ -338,7 +338,7 @@ def plot_raw(
                                   linestyle="--", alpha=0.45)
     ax_sp_ref.set_title(f"Rolling Spearman ρ — {ref_lbl3} vs Proxy", fontsize=11)
     ax_sp_ref.set_xlabel(_xlabel, fontsize=10)
-    ax_sp_ref.set_ylabel("Spearman ρ", fontsize=10)
+    # ax_sp_ref.set_ylabel("Spearman ρ", fontsize=10)
     ax_sp_ref.axhline(0, color="black", linewidth=0.8, linestyle=":")
     ax_sp_ref.legend(fontsize="medium", loc="best")
     ax_sp_ref.grid(True, alpha=0.3, linestyle="--")
@@ -372,7 +372,7 @@ def plot_raw(
         f"Rolling Spearman ρ — {ref_lbl3} vs Entropy (per layer)", fontsize=11
     )
     ax_sp_ent.set_xlabel(_xlabel, fontsize=10)
-    ax_sp_ent.set_ylabel("Spearman ρ", fontsize=10)
+    # ax_sp_ent.set_ylabel("Spearman ρ", fontsize=10)
     ax_sp_ent.axhline(0, color="black", linewidth=0.8, linestyle=":")
     ax_sp_ent.legend(fontsize="x-small", loc="best", ncol=2)
     ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
