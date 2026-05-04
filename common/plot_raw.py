@@ -190,7 +190,7 @@ def plot_raw(
     ax_loss.set_title("Loss", fontsize=11)
     ax_loss.set_xlabel("Iteration", fontsize=10)
     ax_loss.set_ylabel("Cross-entropy loss", fontsize=10)
-    ax_loss.legend(loc="upper right", fontsize="x-small")
+    ax_loss.legend(loc="upper right", fontsize="medium")
     ax_loss.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
@@ -206,7 +206,7 @@ def plot_raw(
     ax_ent.set_title("Attention Entropy", fontsize=11)
     ax_ent.set_xlabel(_ent_xlabel, fontsize=10)
     # ax_ent.set_ylabel("Entropy (nats)", fontsize=10)
-    ax_ent.legend(fontsize="x-small", loc="best", ncol=2)
+    ax_ent.legend(fontsize="medium", loc="best", ncol=2)
     ax_ent.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
@@ -235,7 +235,7 @@ def plot_raw(
     ax_curv.set_title("Raw Curvature Metrics", fontsize=11)
     ax_curv.set_xlabel(_xlabel, fontsize=10)
     ax_curv.set_ylabel("Spectral Norm (λ_max)", fontsize=10)
-    ax_curv.legend(fontsize="x-small", loc="best")
+    ax_curv.legend(fontsize="medium", loc="best")
     ax_curv.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
@@ -314,7 +314,7 @@ def plot_raw(
     ax_sp_h.set_xlabel(_xlabel, fontsize=10)
     ax_sp_h.set_ylabel("Spearman ρ", fontsize=10)
     ax_sp_h.axhline(0, color="black", linewidth=0.8, linestyle=":")
-    ax_sp_h.legend(fontsize="x-small", loc="best")
+    ax_sp_h.legend(fontsize="medium", loc="best")
     ax_sp_h.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
@@ -347,7 +347,7 @@ def plot_raw(
     ax_sp_prec.set_xlabel(_xlabel, fontsize=10)
     ax_sp_prec.set_ylabel("Spearman ρ", fontsize=10)
     ax_sp_prec.axhline(0, color="black", linewidth=0.8, linestyle=":")
-    ax_sp_prec.legend(fontsize="x-small", loc="best")
+    ax_sp_prec.legend(fontsize="medium", loc="best")
     ax_sp_prec.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
