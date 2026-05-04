@@ -492,6 +492,11 @@ def plot_curvature_smoothed_comparison(
         iters_vv, sp_vv, color_vv = _smooth_rolling_results[2]
         if iters_vv.size > 0:
             axs_s[2].plot(iters_vv, sp_vv, color=color_vv, linewidth=3)
+            axs_s[2].set_ylim(0, 1)
+            # axs_s[2].axhline(0, color="black", linewidth=0.8,
+            #                   linestyle="--", alpha=0.45)
+            # axs_s[2].axhline(1, color="black", linewidth=0.8,
+            #                   linestyle="--", alpha=0.45)
 
     _ref_title = r"$\tilde{H}$" if vs_prec_H else "H"
     _vv_label  = r"$H_{VV}$"
