@@ -334,39 +334,37 @@ def plot_raw(
     ax_sp_ref.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
-    # Panel 4 — Rolling Spearman: reference metric vs avg attention entropy
-    # Entropy is measured at ent_idx_arr; curvature at ref_i3.  We
-    # interpolate entropy onto the curvature index grid so both series
-    # share the same iteration positions for the rolling windows.
+    # Panel 4 — Rolling Spearman: reference metric vs per-layer attention entropy
+    # Each layer's entropy is interpolated onto the curvature reference's index
+    # grid so both series share the same iteration positions for the rolling windows.
     # ------------------------------------------------------------------
     ax_sp_ent = axs[4]
-    if entropies.ndim == 2 and entropies.shape[1] > 0:
-        ent_avg = entropies.mean(axis=1)
-    else:
-        ent_avg = np.array([])
-
-    if ent_avg.size >= 2 and ref_v3.size >= 2 and ent_idx_arr.size >= 2:
-        ent_on_ref_grid = np.interp(
-            ref_i3.astype(float),
-            ent_idx_arr.astype(float),
-            ent_avg,
-        )
-        iters_e, sp_e, sp_w_e = _rolling_corr(
-            ref_v3, ref_i3, ent_on_ref_grid, ref_i3
-        )
-        if iters_e.size > 0:
-            ax_sp_ent.plot(iters_e, sp_e, color="steelblue", linewidth=1.5,
-                           label="Avg Entropy")
-            if not np.isnan(sp_w_e):
-                ax_sp_ent.axhline(sp_w_e, color="steelblue", linewidth=0.8,
-                                  linestyle="--", alpha=0.45)
+    if entropies.ndim == 2 and entropies.shape[1] > 0 and ref_v3.size >= 2 and ent_idx_arr.size >= 2:
+        n_layers = entropies.shape[1]
+        colors_ent = plt.cm.viridis(np.linspace(0, 1, n_layers))
+        for li in range(n_layers):
+            layer_ent = entropies[:, li]
+            ent_on_ref_grid = np.interp(
+                ref_i3.astype(float),
+                ent_idx_arr.astype(float),
+                layer_ent,
+            )
+            iters_e, sp_e, sp_w_e = _rolling_corr(
+                ref_v3, ref_i3, ent_on_ref_grid, ref_i3
+            )
+            if iters_e.size > 0:
+                ax_sp_ent.plot(iters_e, sp_e, color=colors_ent[li],
+                               linewidth=1.5, label=f"Layer {li + 1}")
+                if not np.isnan(sp_w_e):
+                    ax_sp_ent.axhline(sp_w_e, color=colors_ent[li], linewidth=0.8,
+                                      linestyle="--", alpha=0.45)
     ax_sp_ent.set_title(
-        f"Rolling Spearman ρ — {ref_lbl3} vs Avg Entropy", fontsize=11
+        f"Rolling Spearman ρ — {ref_lbl3} vs Entropy (per layer)", fontsize=11
     )
     ax_sp_ent.set_xlabel(_xlabel, fontsize=10)
     ax_sp_ent.set_ylabel("Spearman ρ", fontsize=10)
     ax_sp_ent.axhline(0, color="black", linewidth=0.8, linestyle=":")
-    ax_sp_ent.legend(fontsize="medium", loc="best")
+    ax_sp_ent.legend(fontsize="x-small", loc="best", ncol=2)
     ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
@@ -377,7 +375,7 @@ def plot_raw(
             ax.set_xlim(0, _shared_x_max)
 
     run_name = os.path.basename(os.path.dirname(pkl_path))
-    fig.suptitle(f"Raw Analysis — {run_name}", fontsize=13)
+    # fig.suptitle(f"Raw Analysis — {run_name}", fontsize=13)
     fig.tight_layout()
 
     if save_path:
