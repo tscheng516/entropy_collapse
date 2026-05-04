@@ -485,7 +485,7 @@ def plot_curvature_smoothed_comparison(
     for arr, idx, color, ls in _simple_metric_specs:
         if _has_positive_finite(arr) and arr.size >= 3:
             trend, _, _ = smooth_log_trend(arr, lam=lam, use_abs=True)
-            axs_s[1].plot(idx, trend, color=color, linestyle=ls, linewidth=2)
+            axs_s[1].plot(idx, trend, color=color, linestyle=ls, linewidth=3)
     axs_s[1].set_yscale("log")
     axs_s[1].minorticks_off()
 
@@ -499,7 +499,7 @@ def plot_curvature_smoothed_comparison(
     _ref_title = r"$\tilde{H}$" if vs_prec_H else "H"
     for _ax_s, _t_s in zip(axs_s, [
         "Attention Entropy",
-        "Curvature Metrics",
+        f"{_ref_title} and Proxies",
         f"Rolling Spearman\n({_ref_title} vs Proxies)",
     ]):
         _ax_s.set_title(_t_s, fontsize=16, fontweight="bold")
