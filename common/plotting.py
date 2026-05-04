@@ -199,6 +199,18 @@ def plot_curvature_smoothed_comparison(
         bfgs_arr, bfgs_idx = np.array([]), np.array([], dtype=int)
         fd_arr,   fd_idx   = np.array([]), np.array([], dtype=int)
 
+    # Shared x-axis upper bound — derived from actual measured iterations so
+    # that all panels (entropy, curvature, Spearman) share the same x range
+    # even though the rolling-window panels have a shorter plotted extent.
+    _x_max_candidates = [
+        idx[-1] for idx in [h_idx, prec_idx, gn_idx, vv_idx,
+                             diag_idx, fisher_idx, kfac_idx]
+        if idx.size > 0
+    ]
+    if compute_fd:
+        _x_max_candidates += [idx[-1] for idx in [bfgs_idx, fd_idx] if idx.size > 0]
+    _x_max: int | None = int(max(_x_max_candidates)) if _x_max_candidates else None
+
     _xlabel = (
         f"Iteration (every {hessian_intv})"
         if skip_intv and hessian_intv > 1 else "Iteration"
@@ -433,6 +445,14 @@ def plot_curvature_smoothed_comparison(
         _ax.axhline(0, color="black", linewidth=0.8, linestyle=":")
         _ax.legend(fontsize="x-small", loc="best")
         _ax.grid(True, alpha=0.3, linestyle="--")
+
+    # Apply uniform x limits to all 6 panels
+    if _x_max is not None:
+        _ent_x_max = int(ent_idx_arr[-1]) if ent_idx_arr.size > 0 else _x_max
+        _shared_x_max = max(_x_max, _ent_x_max)
+        for _ax_align in [ax_ent_raw, ax_raw, ax_sp,
+                          ax_ent_smooth, ax_smooth, ax_sp_smooth]:
+            _ax_align.set_xlim(0, _shared_x_max)
 
     fig.suptitle(
         f"Curvature Analysis (λ_max) — λ={lam}  |  5k-iter rolling window",
