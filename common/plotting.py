@@ -1028,7 +1028,8 @@ def plot_training_dynamics(
 
     for row, name in enumerate(opt_names):
         h = histories[name]
-        color = "blue" if "adam" in name.lower() else "orange"
+        # color = "blue" if "adam" in name.lower() else "orange"
+        color = "orange"
 
         def _as1d(key, alt=None):
             val = h.get(key, h.get(alt) if alt is not None else None)
