@@ -69,6 +69,7 @@ def plot_raw(
     hessian_intv: int = 50,
     entropy_intv: int = 50,
     compute_fd: bool = False,
+    vs_H_prec: bool = False,
 ) -> plt.Figure:
     """
     Produce a 1 × 5 raw-data summary figure for one ``history.pkl``.
@@ -287,68 +288,86 @@ def plot_raw(
         )
 
     # ------------------------------------------------------------------
-    # Panel 3 — Rolling Spearman: H vs each proxy
+    # Panel 3 — Rolling Spearman: reference (H or Prec_H) vs curvature proxies
     # ------------------------------------------------------------------
-    ax_sp_h = axs[3]
-    _h_proxies = [
-        (prec_arr,   prec_idx,   "purple",    r"$\tilde{H}$"),
-        (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
-        (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
-        (diag_arr,   diag_idx,   "teal",      "Diag H"),
-        (fisher_arr, fisher_idx, "olive",     "Fisher"),
-        (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
-    ]
+    ref_v3   = prec_arr if vs_H_prec else h_arr
+    ref_i3   = prec_idx if vs_H_prec else h_idx
+    ref_lbl3 = r"$\tilde{H}$" if vs_H_prec else "H"
+
+    if vs_H_prec:
+        _proxies3 = [
+            (h_arr,      h_idx,      "red",       "H"),
+            (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
+            (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
+            (diag_arr,   diag_idx,   "teal",      "Diag H"),
+            (fisher_arr, fisher_idx, "olive",     "Fisher"),
+            (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
+        ]
+    else:
+        _proxies3 = [
+            (prec_arr,   prec_idx,   "purple",    r"$\tilde{H}$"),
+            (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
+            (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
+            (diag_arr,   diag_idx,   "teal",      "Diag H"),
+            (fisher_arr, fisher_idx, "olive",     "Fisher"),
+            (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
+        ]
     if compute_fd:
-        _h_proxies += [
+        _proxies3 += [
             (bfgs_arr, bfgs_idx, "navy", "BFGS"),
             (fd_arr,   fd_idx,   "cyan", "FD"),
         ]
-    for p_v, p_i, color_r, label_r in _h_proxies:
-        iters_r, sp_r, sp_w = _rolling_corr(h_arr, h_idx, p_v, p_i)
+
+    ax_sp_ref = axs[3]
+    for p_v, p_i, color_r, label_r in _proxies3:
+        iters_r, sp_r, sp_w = _rolling_corr(ref_v3, ref_i3, p_v, p_i)
         if iters_r.size > 0:
-            ax_sp_h.plot(iters_r, sp_r, color=color_r, linewidth=1.5, label=label_r)
+            ax_sp_ref.plot(iters_r, sp_r, color=color_r, linewidth=1.5, label=label_r)
             if not np.isnan(sp_w):
-                ax_sp_h.axhline(sp_w, color=color_r, linewidth=0.8,
-                                linestyle="--", alpha=0.45)
-    ax_sp_h.set_title("Rolling Spearman ρ — H vs Proxy ", fontsize=11)
-    ax_sp_h.set_xlabel(_xlabel, fontsize=10)
-    ax_sp_h.set_ylabel("Spearman ρ", fontsize=10)
-    ax_sp_h.axhline(0, color="black", linewidth=0.8, linestyle=":")
-    ax_sp_h.legend(fontsize="medium", loc="best")
-    ax_sp_h.grid(True, alpha=0.3, linestyle="--")
+                ax_sp_ref.axhline(sp_w, color=color_r, linewidth=0.8,
+                                  linestyle="--", alpha=0.45)
+    ax_sp_ref.set_title(f"Rolling Spearman ρ — {ref_lbl3} vs Proxy", fontsize=11)
+    ax_sp_ref.set_xlabel(_xlabel, fontsize=10)
+    ax_sp_ref.set_ylabel("Spearman ρ", fontsize=10)
+    ax_sp_ref.axhline(0, color="black", linewidth=0.8, linestyle=":")
+    ax_sp_ref.legend(fontsize="medium", loc="best")
+    ax_sp_ref.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
-    # Panel 4 — Rolling Spearman: Prec_H vs each proxy
+    # Panel 4 — Rolling Spearman: reference metric vs avg attention entropy
+    # Entropy is measured at ent_idx_arr; curvature at ref_i3.  We
+    # interpolate entropy onto the curvature index grid so both series
+    # share the same iteration positions for the rolling windows.
     # ------------------------------------------------------------------
-    ax_sp_prec = axs[4]
-    _prec_proxies = [
-        (h_arr,      h_idx,      "red",       "H"),
-        (gn_arr,     gn_idx,     "brown",     r"$H^{GN}$"),
-        (vv_arr,     vv_idx,     "magenta",   r"$H_{VV}$"),
-        (diag_arr,   diag_idx,   "teal",      "Diag H"),
-        (fisher_arr, fisher_idx, "olive",     "Fisher"),
-        (kfac_arr,   kfac_idx,   "darkgreen", "K-FAC"),
-    ]
-    if compute_fd:
-        _prec_proxies += [
-            (bfgs_arr, bfgs_idx, "navy", "BFGS"),
-            (fd_arr,   fd_idx,   "cyan", "FD"),
-        ]
-    for p_v, p_i, color_r, label_r in _prec_proxies:
-        iters_r, sp_r, sp_w = _rolling_corr(prec_arr, prec_idx, p_v, p_i)
-        if iters_r.size > 0:
-            ax_sp_prec.plot(iters_r, sp_r, color=color_r, linewidth=1.5, label=label_r)
-            if not np.isnan(sp_w):
-                ax_sp_prec.axhline(sp_w, color=color_r, linewidth=0.8,
-                                   linestyle="--", alpha=0.45)
-    ax_sp_prec.set_title(
-        r"Rolling Spearman ρ — $\tilde{H}$ vs Proxy ", fontsize=11
+    ax_sp_ent = axs[4]
+    if entropies.ndim == 2 and entropies.shape[1] > 0:
+        ent_avg = entropies.mean(axis=1)
+    else:
+        ent_avg = np.array([])
+
+    if ent_avg.size >= 2 and ref_v3.size >= 2 and ent_idx_arr.size >= 2:
+        ent_on_ref_grid = np.interp(
+            ref_i3.astype(float),
+            ent_idx_arr.astype(float),
+            ent_avg,
+        )
+        iters_e, sp_e, sp_w_e = _rolling_corr(
+            ref_v3, ref_i3, ent_on_ref_grid, ref_i3
+        )
+        if iters_e.size > 0:
+            ax_sp_ent.plot(iters_e, sp_e, color="steelblue", linewidth=1.5,
+                           label="Avg Entropy")
+            if not np.isnan(sp_w_e):
+                ax_sp_ent.axhline(sp_w_e, color="steelblue", linewidth=0.8,
+                                  linestyle="--", alpha=0.45)
+    ax_sp_ent.set_title(
+        f"Rolling Spearman ρ — {ref_lbl3} vs Avg Entropy", fontsize=11
     )
-    ax_sp_prec.set_xlabel(_xlabel, fontsize=10)
-    ax_sp_prec.set_ylabel("Spearman ρ", fontsize=10)
-    ax_sp_prec.axhline(0, color="black", linewidth=0.8, linestyle=":")
-    ax_sp_prec.legend(fontsize="medium", loc="best")
-    ax_sp_prec.grid(True, alpha=0.3, linestyle="--")
+    ax_sp_ent.set_xlabel(_xlabel, fontsize=10)
+    ax_sp_ent.set_ylabel("Spearman ρ", fontsize=10)
+    ax_sp_ent.axhline(0, color="black", linewidth=0.8, linestyle=":")
+    ax_sp_ent.legend(fontsize="medium", loc="best")
+    ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
     # Apply shared x limits to all panels
@@ -434,6 +453,10 @@ def main() -> None:
         "--compute-fd", action="store_true",
         help="Include BFGS and FD metrics (only if computed during training).",
     )
+    parser.add_argument(
+        "--vs-H-prec", action="store_true",
+        help="Use Prec_H as reference in panel 3 (default: H).",
+    )
     args = parser.parse_args()
 
     pkl_paths = _find_pkl_files(args.path)
@@ -462,6 +485,7 @@ def main() -> None:
             hessian_intv=args.hessian_intv,
             entropy_intv=args.entropy_intv,
             compute_fd=args.compute_fd,
+            vs_H_prec=args.vs_H_prec,
         )
         plt.close(fig)
         print(f"           → saved to {save_path}")
