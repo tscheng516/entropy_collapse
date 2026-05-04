@@ -92,8 +92,10 @@ def plot_raw(
 
     if square_plot:
         fig, ((_sq00, _sq01), (_sq10, _sq11)) = plt.subplots(2, 2, figsize=(14, 12))
-        # axs[0]=None (loss omitted), [1]=entropy, [2]=curvature, [3]=spearman proxy, [4]=spearman entropy
-        axs = [None, _sq00, _sq10, _sq01, _sq11]
+        # Layout:
+        #   (0,0) _sq00 = entropy        (0,1) _sq01 = curvature metrics
+        #   (1,0) _sq10 = ref vs entropy  (1,1) _sq11 = ref vs proxies
+        axs = [None, _sq00, _sq01, _sq11, _sq10]
     else:
         fig, _axs_raw = plt.subplots(1, 5, figsize=(35, 6))
         axs = list(_axs_raw)
