@@ -339,7 +339,7 @@ def plot_raw(
     ax_sp_ref.set_title(f"Rolling Spearman ρ — {ref_lbl3} vs Proxy", fontsize=11)
     ax_sp_ref.set_xlabel(_xlabel, fontsize=10)
     # ax_sp_ref.set_ylabel("Spearman ρ", fontsize=10)
-    ax_sp_ref.axhline(0, color="black", linewidth=0.8, linestyle=":")
+    # ax_sp_ref.axhline(0, color="black", linewidth=0.8, linestyle=":")
     ax_sp_ref.legend(fontsize="medium", loc="best")
     ax_sp_ref.grid(True, alpha=0.3, linestyle="--")
 
@@ -373,7 +373,7 @@ def plot_raw(
     )
     ax_sp_ent.set_xlabel(_xlabel, fontsize=10)
     # ax_sp_ent.set_ylabel("Spearman ρ", fontsize=10)
-    ax_sp_ent.axhline(0, color="black", linewidth=0.8, linestyle=":")
+    # ax_sp_ent.axhline(0, color="black", linewidth=0.8, linestyle=":")
     ax_sp_ent.legend(fontsize="x-small", loc="best", ncol=2)
     ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
 
