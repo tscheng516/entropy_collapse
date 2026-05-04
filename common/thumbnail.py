@@ -182,7 +182,7 @@ def main() -> None:
     args = parser.parse_args()
 
     save_path = args.out or os.path.join(
-        os.path.dirname(os.path.abspath(args.pkl_path)), "thumbnail.pdf"
+        os.path.dirname(os.path.abspath(args.pkl_path)), "thumbnail.png"
     )
     fig = plot_thumbnail(args.pkl_path, lam=args.lam, save_path=save_path)
     plt.close(fig)
