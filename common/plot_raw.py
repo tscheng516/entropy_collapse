@@ -103,8 +103,8 @@ def plot_raw(
     def _prep(key: str) -> tuple[np.ndarray, np.ndarray]:
         raw = _as1d(key)
         if skip_intv:
-            return _extract_positive
-        return raw.copy(), np.arange(len)
+            return _extract_positive(raw)
+        return raw.copy(), np.arange(len(raw))
 
     # ------------------------------------------------------------------
     # Extract curvature metrics
