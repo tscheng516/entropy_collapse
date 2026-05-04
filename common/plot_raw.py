@@ -168,7 +168,7 @@ def plot_raw(
     ax_loss = axs[0]
     loss_arr = _as1d("loss")
     if loss_arr.size > 0:
-        ax_loss.plot(loss_arr, color="blue", linewidth=2, label="train loss")
+        ax_loss.plot(loss_arr, color="orange", linewidth=2, label="train loss")
 
     def _plot_series(series, color: str, label: str, ax, linestyle: str = "--") -> None:
         """Plot a possibly sparse (list-of-(step, val) tuples) or dense series."""
