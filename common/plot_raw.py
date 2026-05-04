@@ -70,6 +70,7 @@ def plot_raw(
     entropy_intv: int = 50,
     compute_fd: bool = False,
     vs_H_prec: bool = False,
+    square_plot: bool = True,
 ) -> plt.Figure:
     """
     Produce a 1 × 5 raw-data summary figure for one ``history.pkl``.
@@ -89,7 +90,13 @@ def plot_raw(
     with open(pkl_path, "rb") as fh:
         history = pickle.load(fh)
 
-    fig, axs = plt.subplots(1, 5, figsize=(35, 6))
+    if square_plot:
+        fig, ((_sq00, _sq01), (_sq10, _sq11)) = plt.subplots(2, 2, figsize=(14, 12))
+        # axs[0]=None (loss omitted), [1]=entropy, [2]=curvature, [3]=spearman proxy, [4]=spearman entropy
+        axs = [None, _sq00, _sq10, _sq01, _sq11]
+    else:
+        fig, _axs_raw = plt.subplots(1, 5, figsize=(35, 6))
+        axs = list(_axs_raw)
 
     # ------------------------------------------------------------------
     # Scalar / 1-D extraction helpers
@@ -164,12 +171,9 @@ def plot_raw(
     )
 
     # ------------------------------------------------------------------
-    # Panel 0 — Train + val loss
+    # Panel 0 — Train + val loss  (omitted in square_plot mode)
     # ------------------------------------------------------------------
-    ax_loss = axs[0]
-    loss_arr = _as1d("loss")
-    if loss_arr.size > 0:
-        ax_loss.plot(loss_arr, color="orange", linewidth=2, label="train loss")
+    ax_loss = axs[0]  # None when square_plot=True
 
     def _plot_series(series, color: str, label: str, ax, linestyle: str = "--") -> None:
         """Plot a possibly sparse (list-of-(step, val) tuples) or dense series."""
@@ -187,12 +191,16 @@ def plot_raw(
                 ax.plot(arr, color=color, linestyle=linestyle,
                         linewidth=2, label=label)
 
-    _plot_series(history.get("val_loss", []), "crimson", "val loss", ax_loss)
-    ax_loss.set_title("Loss", fontsize=11)
-    ax_loss.set_xlabel("Iteration", fontsize=10)
-    ax_loss.set_ylabel("Cross-entropy loss", fontsize=10)
-    ax_loss.legend(loc="upper right", fontsize="medium")
-    ax_loss.grid(True, alpha=0.3, linestyle="--")
+    if ax_loss is not None:
+        loss_arr = _as1d("loss")
+        if loss_arr.size > 0:
+            ax_loss.plot(loss_arr, color="orange", linewidth=2, label="train loss")
+        _plot_series(history.get("val_loss", []), "crimson", "val loss", ax_loss)
+        ax_loss.set_title("Loss", fontsize=11)
+        ax_loss.set_xlabel("Iteration", fontsize=10)
+        ax_loss.set_ylabel("Cross-entropy loss", fontsize=10)
+        ax_loss.legend(loc="upper right", fontsize="medium")
+        ax_loss.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
     # Panel 1 — Raw per-layer attention entropy
@@ -372,7 +380,8 @@ def plot_raw(
     # ------------------------------------------------------------------
     if _shared_x_max is not None:
         for ax in axs:
-            ax.set_xlim(0, _shared_x_max)
+            if ax is not None:
+                ax.set_xlim(0, _shared_x_max)
 
     run_name = os.path.basename(os.path.dirname(pkl_path))
     # fig.suptitle(f"Raw Analysis — {run_name}", fontsize=13)
@@ -455,6 +464,10 @@ def main() -> None:
         "--vs-H-prec", action="store_true",
         help="Use Prec_H as reference in panel 3 (default: H).",
     )
+    parser.add_argument(
+        "--square-plot", action="store_true",
+        help="Use a 2×2 square layout instead of the default 1×5 layout.",
+    )
     args = parser.parse_args()
 
     pkl_paths = _find_pkl_files(args.path)
@@ -484,6 +497,7 @@ def main() -> None:
             entropy_intv=args.entropy_intv,
             compute_fd=args.compute_fd,
             vs_H_prec=args.vs_H_prec,
+            square_plot=args.square_plot,
         )
         plt.close(fig)
         print(f"           → saved to {save_path}")
