@@ -468,14 +468,12 @@ def plot_curvature_smoothed_comparison(
     # ------------------------------------------------------------------
     fig_simple, axs_s = plt.subplots(1, 3, figsize=(20, 5))
 
-    # Panel 0: smoothed attention entropy (per layer)
+    # Panel 0: smoothed average attention entropy
     if entropies.ndim == 2 and entropies.shape[1] > 0:
-        n_layers_s = entropies.shape[1]
-        colors_ent_s = plt.cm.viridis(np.linspace(0, 1, n_layers_s))
-        for li in range(n_layers_s):
-            if entropies[:, li].size >= 3:
-                trend_ent_s, _, _ = smooth_log_trend(entropies[:, li], lam=lam, use_abs=True)
-                axs_s[0].plot(ent_idx_arr, trend_ent_s, color=colors_ent_s[li], linewidth=3)
+        ent_avg_s = entropies.mean(axis=1)
+        if ent_avg_s.size >= 3:
+            trend_ent_avg, _, _ = smooth_log_trend(ent_avg_s, lam=lam, use_abs=True)
+            axs_s[0].plot(ent_idx_arr, trend_ent_avg, color="steelblue", linewidth=3)
 
     # Panel 1: smoothed curvature metrics — reference (H or Prec_H) and H_VV only
     _simple_metric_specs = [
@@ -489,18 +487,18 @@ def plot_curvature_smoothed_comparison(
     axs_s[1].set_yscale("log")
     axs_s[1].minorticks_off()
 
-    # Panel 2: rolling Spearman — index 0 (H or Prec_H proxy) and index 2 (H_VV)
-    for i_s2, (iters_s2, sp_s2, color_r) in enumerate(_smooth_rolling_results):
-        if i_s2 not in (0, 2):
-            continue
-        if iters_s2.size > 0:
-            axs_s[2].plot(iters_s2, sp_s2, color=color_r, linewidth=3)
+    # Panel 2: rolling Spearman — H_VV vs reference (smoothed) only
+    if len(_smooth_rolling_results) > 2:
+        iters_vv, sp_vv, color_vv = _smooth_rolling_results[2]
+        if iters_vv.size > 0:
+            axs_s[2].plot(iters_vv, sp_vv, color=color_vv, linewidth=3)
 
     _ref_title = r"$\tilde{H}$" if vs_prec_H else "H"
+    _vv_label  = r"$H_{VV}$"
     for _ax_s, _t_s in zip(axs_s, [
-        "Attention Entropy",
-        f"{_ref_title} and Proxies",
-        f"Rolling Spearman\n({_ref_title} vs Proxies)",
+        "Avg. Attention Entropy",
+        f"{_ref_title} and {_vv_label}",
+        f"Rolling Spearman\n({_vv_label} vs {_ref_title})",
     ]):
         _ax_s.set_title(_t_s, fontsize=16, fontweight="bold")
         _ax_s.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
