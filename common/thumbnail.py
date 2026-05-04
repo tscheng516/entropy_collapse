@@ -162,6 +162,32 @@ def plot_thumbnail(
 
 
 # ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
+
+def _find_pkl_files(path: str) -> list[str]:
+    """
+    Return a sorted list of ``history.pkl`` paths to process.
+
+    * If *path* is a ``.pkl`` file, return ``[path]``.
+    * If *path* is a directory, walk ``<path>/out/`` recursively (falling
+      back to *path* itself if no ``out/`` sub-dir exists) and collect
+      every ``history.pkl``.
+    """
+    path = os.path.abspath(path)
+    if os.path.isfile(path):
+        return [path]
+    search_root = os.path.join(path, "out")
+    if not os.path.isdir(search_root):
+        search_root = path
+    pkls: list[str] = []
+    for root, _dirs, files in os.walk(search_root):
+        if "history.pkl" in files:
+            pkls.append(os.path.join(root, "history.pkl"))
+    return sorted(pkls)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -169,11 +195,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Produce a 1×2 training summary thumbnail from history.pkl."
     )
-    parser.add_argument("pkl_path", help="Path to history.pkl")
+    parser.add_argument(
+        "pkl_path",
+        help="Path to a history.pkl file, OR a project folder (e.g. ViT/) whose "
+             "out/ sub-tree is searched recursively for every history.pkl.",
+    )
     parser.add_argument(
         "-o", "--out", default=None,
-        help="Output file path (e.g. thumbnail.pdf). "
-             "Defaults to thumbnail.pdf next to the pkl.",
+        help="Output file path when processing a single pkl (e.g. thumbnail.pdf). "
+             "Ignored when processing multiple files (each thumbnail is saved next "
+             "to its history.pkl).",
     )
     parser.add_argument(
         "--lam", type=float, default=10.0,
@@ -181,12 +212,21 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    save_path = args.out or os.path.join(
-        os.path.dirname(os.path.abspath(args.pkl_path)), "thumbnail.png"
-    )
-    fig = plot_thumbnail(args.pkl_path, lam=args.lam, save_path=save_path)
-    plt.close(fig)
-    print(f"[thumbnail] saved → {save_path}")
+    pkl_paths = _find_pkl_files(args.pkl_path)
+    if not pkl_paths:
+        print(f"[thumbnail] no history.pkl found under '{args.pkl_path}'")
+        return
+
+    for i, pkl in enumerate(pkl_paths, 1):
+        save_path = (
+            args.out
+            if (args.out and len(pkl_paths) == 1)
+            else os.path.join(os.path.dirname(pkl), "thumbnail.png")
+        )
+        print(f"[thumbnail] [{i}/{len(pkl_paths)}] {pkl}")
+        fig = plot_thumbnail(pkl, lam=args.lam, save_path=save_path)
+        plt.close(fig)
+        print(f"[thumbnail] saved → {save_path}")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # I/O
     # ------------------------------------------------------------------ #
-    out_dir: str = "out/nanochat/pilot"
+    out_dir: str = "out/climbmix/pilot"
     eval_interval: int = 500
     log_interval: int = 10
     checkpoint_interval: int = -1          # -1 = disabled
@@ -163,7 +163,7 @@ class D8Config(TrainConfig):
     n_embd: int = 512
     sequence_len: int = 512
 
-    out_dir: str = "out/nanochat/d8"
+    out_dir: str = "out/climbmix/d8"
     wandb_log: bool = True
     wandb_project: str = "entropy-collapse-nanochat"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
@@ -182,7 +182,7 @@ class D12Config(TrainConfig):
     n_embd: int = 768
     sequence_len: int = 1024
 
-    out_dir: str = "out/nanochat/d12"
+    out_dir: str = "out/climbmix/d12"
     wandb_log: bool = True
     wandb_project: str = "entropy-collapse-nanochat"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
@@ -202,7 +202,7 @@ class D24Config(TrainConfig):
     n_embd: int = 1536
     sequence_len: int = 2048
 
-    out_dir: str = "out/nanochat/d24"
+    out_dir: str = "out/climbmix/d24"
     wandb_log: bool = True
     wandb_project: str = "entropy-collapse-nanochat"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")

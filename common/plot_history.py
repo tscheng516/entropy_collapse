@@ -482,6 +482,30 @@ def plot_history(
 # ======================================================================
 
 
+def _find_pkl_files(path: str) -> list[str]:
+    """
+    Return a sorted list of ``history.pkl`` paths to process.
+
+    * If *path* is a file ending in ``.pkl``, return ``[path]``.
+    * If *path* is a directory, walk ``<path>/out/`` recursively and
+      collect every ``history.pkl`` found there.
+    * Otherwise (directory without an ``out/`` sub-dir), walk *path*
+      itself recursively.
+    """
+    path = os.path.abspath(path)
+    if os.path.isfile(path):
+        return [path]
+    # Directory: prefer <path>/out/ if it exists
+    search_root = os.path.join(path, "out")
+    if not os.path.isdir(search_root):
+        search_root = path
+    pkls: list[str] = []
+    for root, _dirs, files in os.walk(search_root):
+        if "history.pkl" in files:
+            pkls.append(os.path.join(root, "history.pkl"))
+    return sorted(pkls)
+
+
 def build_arg_parser(description: str = "Re-run post-training analysis from history.pkl.") -> argparse.ArgumentParser:
     """Return a pre-populated ArgumentParser for the plot_history CLI."""
     parser = argparse.ArgumentParser(description=description)
@@ -522,17 +546,30 @@ def build_arg_parser(description: str = "Re-run post-training analysis from hist
 
 def main() -> None:
     parser = build_arg_parser()
-    args = parser.parse_args()
-    plot_history(
-        pkl_path=args.pkl_path,
-        out_dir=args.out_dir,
-        hessian_intv=args.hessian_intv,
-        entropy_intv=args.entropy_intv,
-        skip_intv=not args.no_skip_intv,
-        lam=args.lam,
-        compute_fd=args.compute_fd,
-        task=args.task,
+    # Make pkl_path optional-ish so we can accept a directory
+    parser._actions[[a.dest for a in parser._actions].index("pkl_path")].help = (
+        "Path to a history.pkl file, OR a project folder (e.g. ViT/) whose "
+        "out/ sub-tree will be searched recursively for every history.pkl."
     )
+    args = parser.parse_args()
+
+    pkl_paths = _find_pkl_files(args.pkl_path)
+    if not pkl_paths:
+        print(f"[plot_history] no history.pkl found under '{args.pkl_path}'")
+        return
+
+    for i, pkl in enumerate(pkl_paths, 1):
+        print(f"\n[plot_history] [{i}/{len(pkl_paths)}] processing {pkl}")
+        plot_history(
+            pkl_path=pkl,
+            out_dir=args.out_dir,   # None → same dir as pkl
+            hessian_intv=args.hessian_intv,
+            entropy_intv=args.entropy_intv,
+            skip_intv=not args.no_skip_intv,
+            lam=args.lam,
+            compute_fd=args.compute_fd,
+            task=args.task,
+        )
 
 
 if __name__ == "__main__":
