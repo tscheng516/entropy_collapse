@@ -446,10 +446,12 @@ def plot_curvature_smoothed_comparison(
         _ax.legend(fontsize="x-small", loc="best")
         _ax.grid(True, alpha=0.3, linestyle="--")
 
+    # Shared x-axis limit for both fig and fig_simple
+    _ent_x_max = int(ent_idx_arr[-1]) if ent_idx_arr.size > 0 else (_x_max or 0)
+    _shared_x_max: int | None = max(_x_max, _ent_x_max) if _x_max is not None else None
+
     # Apply uniform x limits to all 6 panels
-    if _x_max is not None:
-        _ent_x_max = int(ent_idx_arr[-1]) if ent_idx_arr.size > 0 else _x_max
-        _shared_x_max = max(_x_max, _ent_x_max)
+    if _shared_x_max is not None:
         for _ax_align in [ax_ent_raw, ax_raw, ax_sp,
                           ax_ent_smooth, ax_smooth, ax_sp_smooth]:
             _ax_align.set_xlim(0, _shared_x_max)
@@ -475,16 +477,22 @@ def plot_curvature_smoothed_comparison(
                 trend_ent_s, _, _ = smooth_log_trend(entropies[:, li], lam=lam, use_abs=True)
                 axs_s[0].plot(ent_idx_arr, trend_ent_s, color=colors_ent_s[li], linewidth=3)
 
-    # Panel 1: smoothed curvature metrics
-    for arr, idx, color, ls, label in _metric_specs:
+    # Panel 1: smoothed curvature metrics — reference (H or Prec_H) and H_VV only
+    _simple_metric_specs = [
+        (prec_arr, prec_idx, "purple", "--") if vs_prec_H else (h_arr, h_idx, "red", "-"),
+        (vv_arr,   vv_idx,   "magenta", ":"),
+    ]
+    for arr, idx, color, ls in _simple_metric_specs:
         if _has_positive_finite(arr) and arr.size >= 3:
             trend, _, _ = smooth_log_trend(arr, lam=lam, use_abs=True)
             axs_s[1].plot(idx, trend, color=color, linestyle=ls, linewidth=2)
     axs_s[1].set_yscale("log")
     axs_s[1].minorticks_off()
 
-    # Panel 2: rolling Spearman of smoothed reference vs smoothed proxies
-    for iters_s2, sp_s2, color_r in _smooth_rolling_results:
+    # Panel 2: rolling Spearman — index 0 (H or Prec_H proxy) and index 2 (H_VV)
+    for i_s2, (iters_s2, sp_s2, color_r) in enumerate(_smooth_rolling_results):
+        if i_s2 not in (0, 2):
+            continue
         if iters_s2.size > 0:
             axs_s[2].plot(iters_s2, sp_s2, color=color_r, linewidth=3)
 
@@ -498,6 +506,10 @@ def plot_curvature_smoothed_comparison(
         _ax_s.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
         for _sp in _ax_s.spines.values():
             _sp.set_visible(True)
+
+    if _shared_x_max is not None:
+        for _ax_s in axs_s:
+            _ax_s.set_xlim(0, _shared_x_max)
 
     fig_simple.tight_layout()
     return fig, fig_simple
