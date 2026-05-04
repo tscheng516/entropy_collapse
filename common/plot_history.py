@@ -544,6 +544,21 @@ def build_arg_parser(description: str = "Re-run post-training analysis from hist
     return parser
 
 
+def _infer_task(path: str) -> str | None:
+    """
+    Guess the task type from a file/folder path.
+    Returns ``"lm"``, ``"depth"``, or ``None`` (unknown → keep default).
+    """
+    parts = os.path.abspath(path).replace("\\", "/").split("/")
+    for part in parts:
+        p = part.lower()
+        if "nanochat" in p or "nanogpt" in p or p == "lm":
+            return "lm"
+        if "depth" in p:
+            return "depth"
+    return None
+
+
 def main() -> None:
     parser = build_arg_parser()
     # Make pkl_path optional-ish so we can accept a directory
@@ -560,15 +575,22 @@ def main() -> None:
 
     for i, pkl in enumerate(pkl_paths, 1):
         print(f"\n[plot_history] [{i}/{len(pkl_paths)}] processing {pkl}")
+        # Auto-infer task from path when user left --task at its default value.
+        task = args.task
+        if task == "classification":
+            inferred = _infer_task(pkl)
+            if inferred is not None:
+                task = inferred
+                print(f"[plot_history] task inferred from path: {task}")
         plot_history(
             pkl_path=pkl,
-            out_dir=args.out_dir,   # None → same dir as pkl
+            out_dir=args.out_dir,   # None -> same dir as each pkl
             hessian_intv=args.hessian_intv,
             entropy_intv=args.entropy_intv,
             skip_intv=not args.no_skip_intv,
             lam=args.lam,
             compute_fd=args.compute_fd,
-            task=args.task,
+            task=task,
         )
 
 

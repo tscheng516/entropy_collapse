@@ -1001,6 +1001,25 @@ def plot_training_dynamics(
     """
     opt_names = list(histories.keys())
     n_rows = len(opt_names)
+
+    # Auto-downgrade task when no task-specific metric data is present.
+    # Prevents an empty middle panel when task='classification'/'depth' is
+    # passed but the history dict contains no accuracy/RMSE keys (e.g. LM runs).
+    if task == "classification":
+        has_acc = any(
+            len(h.get("acc", h.get("train_acc", h.get("val_acc", h.get("test_acc", []))))) > 0
+            for h in histories.values()
+        )
+        if not has_acc:
+            task = "lm"
+    elif task == "depth":
+        has_depth = any(
+            len(h.get("val_rmse", h.get("val_delta1", []))) > 0
+            for h in histories.values()
+        )
+        if not has_depth:
+            task = "lm"
+
     n_cols = 2 if task == "lm" else 3
     fw = 14 if task == "lm" else 21
     fig, axs = plt.subplots(n_rows, n_cols, figsize=(fw, 4.8 * n_rows))
