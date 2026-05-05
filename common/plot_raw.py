@@ -382,7 +382,7 @@ def plot_raw(
                                       linestyle="--", alpha=0.45)
     if ax_sp_ent is not None:
         ax_sp_ent.set_title(
-            f"Rolling Spearman ρ — {ref_lbl3} vs Entropy (per layer)", fontsize=24
+            f"Rolling Spearman ρ — {ref_lbl3} vs Entropy", fontsize=24
         )
         ax_sp_ent.set_xlabel(_xlabel, fontsize=20)
         ax_sp_ent.legend(fontsize="large", loc="best", ncol=2)
