@@ -77,6 +77,7 @@ def plot_thumbnail(
     pkl_path: str,
     lam: float = 10.0,
     save_path: str | None = None,
+    fmt: str = "png",
 ) -> plt.Figure:
     """
     Load ``history.pkl`` and produce a 1×2 thumbnail figure.
@@ -157,7 +158,7 @@ def plot_thumbnail(
 
     fig.tight_layout()
     if save_path:
-        fig.savefig(save_path, bbox_inches="tight")
+        fig.savefig(save_path, format=fmt, bbox_inches="tight")
     return fig
 
 
@@ -210,6 +211,11 @@ def main() -> None:
         "--lam", type=float, default=10.0,
         help="Smoothing strength (default: 10)",
     )
+    parser.add_argument(
+        "--fmt", type=str, default="png",
+        choices=["png", "pdf", "svg", "eps"],
+        help="Output image format (default: png).",
+    )
     args = parser.parse_args()
 
     pkl_paths = _find_pkl_files(args.pkl_path)
@@ -221,10 +227,10 @@ def main() -> None:
         save_path = (
             args.out
             if (args.out and len(pkl_paths) == 1)
-            else os.path.join(os.path.dirname(pkl), "thumbnail.png")
+            else os.path.join(os.path.dirname(pkl), f"thumbnail.{args.fmt}")
         )
         print(f"[thumbnail] [{i}/{len(pkl_paths)}] {pkl}")
-        fig = plot_thumbnail(pkl, lam=args.lam, save_path=save_path)
+        fig = plot_thumbnail(pkl, lam=args.lam, save_path=save_path, fmt=args.fmt)
         plt.close(fig)
         print(f"[thumbnail] saved → {save_path}")
 

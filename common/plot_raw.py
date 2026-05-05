@@ -70,8 +70,17 @@ def plot_raw(
     entropy_intv: int = 50,
     compute_fd: bool = False,
     vs_H_prec: bool = False,
-    square_plot: bool = True,
+    layout: str = "22",
+    fmt: str = "png",
 ) -> plt.Figure:
+    """
+    Layout modes
+    ------------
+    "15" — 1×5: loss | entropy | curvature | ref vs proxies | ref vs entropy
+    "22" — 2×2: entropy (top-left) | curvature (top-right)
+                ref vs entropy (bottom-left) | ref vs proxies (bottom-right)
+    "13" — 1×3: entropy | curvature | ref vs proxies
+    """
     """
     Produce a 1 × 5 raw-data summary figure for one ``history.pkl``.
 
@@ -90,13 +99,16 @@ def plot_raw(
     with open(pkl_path, "rb") as fh:
         history = pickle.load(fh)
 
-    if square_plot:
+    if layout == "22":
         fig, ((_sq00, _sq01), (_sq10, _sq11)) = plt.subplots(2, 2, figsize=(14, 12))
-        # Layout:
-        #   (0,0) _sq00 = entropy        (0,1) _sq01 = curvature metrics
-        #   (1,0) _sq10 = ref vs entropy  (1,1) _sq11 = ref vs proxies
+        # (0,0)=entropy  (0,1)=curvature
+        # (1,0)=ref vs entropy  (1,1)=ref vs proxies
         axs = [None, _sq00, _sq01, _sq11, _sq10]
-    else:
+    elif layout == "13":
+        fig, (_a0, _a1, _a2) = plt.subplots(1, 3, figsize=(21, 6))
+        # entropy | curvature | ref vs proxies  (ref vs entropy omitted)
+        axs = [None, _a0, _a1, _a2, None]
+    else:  # "15"
         fig, _axs_raw = plt.subplots(1, 5, figsize=(35, 6))
         axs = list(_axs_raw)
 
@@ -349,7 +361,7 @@ def plot_raw(
     # grid so both series share the same iteration positions for the rolling windows.
     # ------------------------------------------------------------------
     ax_sp_ent = axs[4]
-    if entropies.ndim == 2 and entropies.shape[1] > 0 and ref_v3.size >= 2 and ent_idx_arr.size >= 2:
+    if ax_sp_ent is not None and entropies.ndim == 2 and entropies.shape[1] > 0 and ref_v3.size >= 2 and ent_idx_arr.size >= 2:
         n_layers = entropies.shape[1]
         colors_ent = plt.cm.viridis(np.linspace(0, 1, n_layers))
         for li in range(n_layers):
@@ -368,14 +380,13 @@ def plot_raw(
                 if not np.isnan(sp_w_e):
                     ax_sp_ent.axhline(sp_w_e, color=colors_ent[li], linewidth=0.8,
                                       linestyle="--", alpha=0.45)
-    ax_sp_ent.set_title(
-        f"Rolling Spearman ρ — {ref_lbl3} vs Entropy (per layer)", fontsize=11
-    )
-    ax_sp_ent.set_xlabel(_xlabel, fontsize=10)
-    # ax_sp_ent.set_ylabel("Spearman ρ", fontsize=10)
-    # ax_sp_ent.axhline(0, color="black", linewidth=0.8, linestyle=":")
-    ax_sp_ent.legend(fontsize="x-small", loc="best", ncol=2)
-    ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
+    if ax_sp_ent is not None:
+        ax_sp_ent.set_title(
+            f"Rolling Spearman ρ — {ref_lbl3} vs Entropy (per layer)", fontsize=11
+        )
+        ax_sp_ent.set_xlabel(_xlabel, fontsize=10)
+        ax_sp_ent.legend(fontsize="x-small", loc="best", ncol=2)
+        ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
     # Apply shared x limits to all panels
@@ -390,7 +401,7 @@ def plot_raw(
     fig.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        fig.savefig(save_path, format=fmt, dpi=150, bbox_inches="tight")
 
     return fig
 
@@ -448,11 +459,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--hessian-intv", type=int, default=50,
-        help="Hessian computation frequency (x-axis label, default 1).",
+        help="Hessian computation frequency (x-axis label, default 50).",
     )
     parser.add_argument(
         "--entropy-intv", type=int, default=50,
-        help="Entropy computation frequency (x-axis label, default 1).",
+        help="Entropy computation frequency (x-axis label, default 50).",
     )
     parser.add_argument(
         "--no-skip-intv", action="store_true",
@@ -464,11 +475,22 @@ def main() -> None:
     )
     parser.add_argument(
         "--vs-H-prec", action="store_true",
-        help="Use Prec_H as reference in panel 3 (default: H).",
+        help="Use Prec_H as reference in correlation (default: H).",
     )
     parser.add_argument(
-        "--square-plot", action="store_true",
-        help="Use a 2×2 square layout instead of the default 1×5 layout.",
+        "--layout", type=str, default="22",
+        choices=["15", "22", "13"],
+        help=(
+            "Figure layout: "
+            "'15' = 1×5 detailed (loss|entropy|curvature|ref-vs-proxy|ref-vs-entropy), "
+            "'22' = 2×2 square (default), "
+            "'13' = 1×3 compact (entropy|curvature|ref-vs-proxy)."
+        ),
+    )
+    parser.add_argument(
+        "--fmt", type=str, default="png",
+        choices=["png", "pdf", "svg", "eps"],
+        help="Output image format (default: png).",
     )
     args = parser.parse_args()
 
@@ -482,14 +504,15 @@ def main() -> None:
     for i, pkl in enumerate(pkl_paths, 1):
         print(f"[plot_raw] [{i}/{len(pkl_paths)}] {pkl}")
 
+        _suffix = f"plot_raw_{args.layout}.{args.fmt}"
         if single and args.out:
             save_path = args.out
         elif args.out:
             os.makedirs(args.out, exist_ok=True)
             run_id = os.path.basename(os.path.dirname(pkl))
-            save_path = os.path.join(args.out, f"{run_id}_plot_raw.png")
+            save_path = os.path.join(args.out, f"{run_id}_{_suffix}")
         else:
-            save_path = os.path.join(os.path.dirname(pkl), "plot_raw.png")
+            save_path = os.path.join(os.path.dirname(pkl), _suffix)
 
         fig = plot_raw(
             pkl_path=pkl,
@@ -499,7 +522,8 @@ def main() -> None:
             entropy_intv=args.entropy_intv,
             compute_fd=args.compute_fd,
             vs_H_prec=args.vs_H_prec,
-            square_plot=args.square_plot,
+            layout=args.layout,
+            fmt=args.fmt,
         )
         plt.close(fig)
         print(f"           → saved to {save_path}")

@@ -332,6 +332,7 @@ def plot_history(
     lam: float = 10.0,
     compute_fd: bool = False,
     task: str = "classification",
+    fmt: str = "png",
 ) -> None:
     """
     Load a ``history.pkl`` and reproduce every post-training plot and analysis.
@@ -400,18 +401,18 @@ def plot_history(
         fig = plot_training_dynamics(
             histories={run_label: history},
             lrs={run_label: lr_peak},
-            save_path=os.path.join(out_dir, "training_dynamics.png"),
+            save_path=os.path.join(out_dir, f"training_dynamics.{fmt}"),
             skip_intv=skip_intv,
             entropy_intv=entropy_intv,
             task=task,
         )
         plt.close(fig)
-        print("[plot] training_dynamics.png")
+        print(f"[plot] training_dynamics.{fmt}")
 
         # --- Smoothed curvature comparison ---
         fig_smooth, fig_simple = plot_curvature_smoothed_comparison(
             history, lam=lam,
-            save_path=os.path.join(out_dir, "curvature_smoothed_comparison.png"),
+            save_path=os.path.join(out_dir, f"curvature_smoothed_comparison.{fmt}"),
             skip_intv=skip_intv,
             hessian_intv=hessian_intv,
             entropy_intv=entropy_intv,
@@ -419,12 +420,12 @@ def plot_history(
         )
         plt.close(fig_smooth)
         fig_simple.savefig(
-            os.path.join(out_dir, "curvature_simple_comparison.png"),
+            os.path.join(out_dir, f"curvature_simple_comparison.{fmt}"),
             bbox_inches="tight",
         )
         plt.close(fig_simple)
-        print("[plot] curvature_smoothed_comparison.png")
-        print("[plot] curvature_simple_comparison.png")
+        print(f"[plot] curvature_smoothed_comparison.{fmt}")
+        print(f"[plot] curvature_simple_comparison.{fmt}")
 
         # --- Spike co-occurrence (computation kept; PNGs disabled) ---
         proxy_label = {
@@ -541,6 +542,11 @@ def build_arg_parser(description: str = "Re-run post-training analysis from hist
              "Controls which config groups appear in the Markdown report. "
              "(default: classification)",
     )
+    parser.add_argument(
+        "--fmt", type=str, default="png",
+        choices=["png", "pdf", "svg", "eps"],
+        help="Output image format (default: png).",
+    )
     return parser
 
 
@@ -591,6 +597,7 @@ def main() -> None:
             lam=args.lam,
             compute_fd=args.compute_fd,
             task=task,
+            fmt=args.fmt,
         )
 
 
