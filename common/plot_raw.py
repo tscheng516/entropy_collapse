@@ -210,9 +210,9 @@ def plot_raw(
         if loss_arr.size > 0:
             ax_loss.plot(loss_arr, color="orange", linewidth=2, label="train loss")
         _plot_series(history.get("val_loss", []), "crimson", "val loss", ax_loss)
-        ax_loss.set_title("Loss", fontsize=11)
-        ax_loss.set_xlabel("Iteration", fontsize=10)
-        ax_loss.set_ylabel("Cross-entropy loss", fontsize=10)
+        ax_loss.set_title("Loss", fontsize=24)
+        ax_loss.set_xlabel("Iteration", fontsize=20)
+        ax_loss.set_ylabel("Cross-entropy loss", fontsize=20)
         ax_loss.legend(loc="upper right", fontsize="medium")
         ax_loss.grid(True, alpha=0.3, linestyle="--")
 
@@ -226,9 +226,9 @@ def plot_raw(
         for li in range(n_layers):
             ax_ent.plot(ent_idx_arr, entropies[:, li],
                         color=colors_ent[li], label=f"Layer {li + 1}")
-    ax_ent.set_title("Attention Entropy", fontsize=11)
-    ax_ent.set_xlabel(_ent_xlabel, fontsize=10)
-    # ax_ent.set_ylabel("Entropy (nats)", fontsize=10)
+    ax_ent.set_title("Attention Entropy", fontsize=24)
+    ax_ent.set_xlabel(_ent_xlabel, fontsize=20)
+    # ax_ent.set_ylabel("Entropy (nats)", fontsize=20)
     ax_ent.legend(fontsize="medium", loc="best", ncol=2)
     ax_ent.grid(True, alpha=0.3, linestyle="--")
 
@@ -255,9 +255,9 @@ def plot_raw(
             ax_curv.plot(idx, arr, color=color, linestyle=ls,
                          linewidth=1.5, label=label)
     ax_curv.set_yscale("log")
-    ax_curv.set_title("Spectral Norm of Hessian and Proxies", fontsize=11)
-    ax_curv.set_xlabel(_xlabel, fontsize=10)
-    # ax_curv.set_ylabel("Spectral Norm (λ_max)", fontsize=10)
+    ax_curv.set_title("Spectral Norm of Hessian and Proxies", fontsize=24)
+    ax_curv.set_xlabel(_xlabel, fontsize=20)
+    # ax_curv.set_ylabel("Spectral Norm (λ_max)", fontsize=20)
     ax_curv.legend(fontsize="medium", loc="best")
     ax_curv.grid(True, alpha=0.3, linestyle="--")
 
@@ -348,9 +348,9 @@ def plot_raw(
             if not np.isnan(sp_w):
                 ax_sp_ref.axhline(sp_w, color=color_r, linewidth=0.8,
                                   linestyle="--", alpha=0.45)
-    ax_sp_ref.set_title(f"Rolling Spearman ρ — {ref_lbl3} vs Proxy", fontsize=11)
-    ax_sp_ref.set_xlabel(_xlabel, fontsize=10)
-    # ax_sp_ref.set_ylabel("Spearman ρ", fontsize=10)
+    ax_sp_ref.set_title(f"Rolling Spearman ρ — {ref_lbl3} vs Proxy", fontsize=24)
+    ax_sp_ref.set_xlabel(_xlabel, fontsize=20)
+    # ax_sp_ref.set_ylabel("Spearman ρ", fontsize=20)
     # ax_sp_ref.axhline(0, color="black", linewidth=0.8, linestyle=":")
     ax_sp_ref.legend(fontsize="medium", loc="best")
     ax_sp_ref.grid(True, alpha=0.3, linestyle="--")
@@ -382,10 +382,10 @@ def plot_raw(
                                       linestyle="--", alpha=0.45)
     if ax_sp_ent is not None:
         ax_sp_ent.set_title(
-            f"Rolling Spearman ρ — {ref_lbl3} vs Entropy (per layer)", fontsize=11
+            f"Rolling Spearman ρ — {ref_lbl3} vs Entropy (per layer)", fontsize=24
         )
-        ax_sp_ent.set_xlabel(_xlabel, fontsize=10)
-        ax_sp_ent.legend(fontsize="x-small", loc="best", ncol=2)
+        ax_sp_ent.set_xlabel(_xlabel, fontsize=20)
+        ax_sp_ent.legend(fontsize="large", loc="best", ncol=2)
         ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
