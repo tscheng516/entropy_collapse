@@ -10,33 +10,13 @@ Additions over the base timm ViT:
     softmax path is required for (a) caching attention matrices and (b)
     second-order gradient computations via ``torch.autograd``.
   * Optional QK normalisation (``qk_norm``).  The default is ``False``,
-    which matches the NanoGPT / LLM experiment setup where no QK-norm is
-    applied.  Set ``qk_norm=True`` to install per-head LayerNorm on the
-    query and key projections (timm's native ``qk_norm`` feature).
+    where no QK-norm is applied.  Set ``qk_norm=True`` to install per-head 
+    LayerNorm on the query and key projections (timm's native ``qk_norm`` 
+    feature).
   * Runtime attention temperature support: set ``attn.temperature`` on
     any attention block (or call ``set_attention_temperature``) to scale
     the attention logits, producing sharper (T < 1) or softer (T > 1)
     attention distributions for entropy-collapse interventions.
-
-Usage::
-
-    from src.model import build_hooked_vit
-
-    # NanoGPT-parity — no QK norm (default)
-    model = build_hooked_vit(
-        model_name="vit_small_patch16_224",
-        num_classes=10,
-        init_std=0.002,
-        use_scaled_init=True,
-        qk_norm=False,
-    )
-
-    # With QK norm
-    model = build_hooked_vit(
-        model_name="vit_small_patch16_224",
-        num_classes=10,
-        qk_norm=True,
-    )
 """
 
 from __future__ import annotations
@@ -157,21 +137,16 @@ def build_hooked_vit(
                           by ``init_std / sqrt(2 * depth)`` — ViT analogue of
                           NanoGPT residual-depth scaling.
         qk_norm:          If ``False`` (default), ``q_norm`` and ``k_norm`` are
-                          ``Identity`` — matching the NanoGPT / LLM experiment
-                          setup.  If ``True``, timm installs per-head LayerNorm
+                          ``Identity``.  If ``True``, timm installs per-head LayerNorm
                           on the query and key projections.
         depth:            Override the number of transformer layers.  ``None``
-                          uses the timm model default.  Set to 6 to match
-                          NanoGPT-small (``n_layer=6``).
+                          uses the timm model default. 
         num_heads:        Override the number of attention heads.  ``None``
-                          uses the timm model default.  Set to 6 to match
-                          NanoGPT-small (``n_head=6``).
+                          uses the timm model default.  
         embed_dim:        Override the embedding dimension.  ``None`` uses the
-                          timm model default.  Set to 384 to match NanoGPT-small
-                          (``n_embd=384``).
+                          timm model default.  
         patch_size:       Override the patch size.  ``None`` uses the timm model
-                          default.  Set to 4 with ``img_size=32`` for CIFAR
-                          (64 patches = NanoGPT-small ``block_size=64``).
+                          default. 
         device:           Target device string.
 
     Returns:

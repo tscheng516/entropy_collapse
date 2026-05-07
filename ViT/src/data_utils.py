@@ -2,7 +2,6 @@
 Data utilities for the ViT entropy-collapse experiments.
 
 Supports the following dataset backends:
-  * CIFAR-10   — auto-downloaded via torchvision (default for pilot tests).
   * CIFAR-100  — auto-downloaded via torchvision.
   * ImageNet-1k — loaded from a local ImageFolder directory tree if present,
                   otherwise downloaded and cached via Hugging Face ``datasets``.
@@ -101,8 +100,7 @@ def load_data(
     ``sampler.set_epoch(epoch)`` to re-shuffle across epochs.
 
     Args:
-        dataset:     One of ``'cifar10'``, ``'cifar100'``, ``'imagenet'``,
-             ``'imagenet1k'``, ``'imagenet_hf'``.
+        dataset:     One of ``'cifar100'``, ``'imagenet1k'``.
         data_dir:    Root directory for data storage / ImageFolder tree.
         img_size:    Spatial size fed to the model (images are resized).
         batch_size:  Per-GPU batch size (passed directly to DataLoader).
@@ -130,24 +128,7 @@ def load_data(
     _world_size = int(os.environ.get("WORLD_SIZE", "1"))
     _is_ddp = _world_size > 1
 
-    if dataset_key == "cifar10":
-        if _is_ddp:
-            if _rank == 0:
-                torchvision.datasets.CIFAR10(
-                    root=data_dir, train=True, download=True,
-                )
-                torchvision.datasets.CIFAR10(
-                    root=data_dir, train=False, download=True,
-                )
-            dist.barrier()
-        train_ds = torchvision.datasets.CIFAR10(
-            root=data_dir, train=True, download=not _is_ddp, transform=train_tf
-        )
-        val_ds = torchvision.datasets.CIFAR10(
-            root=data_dir, train=False, download=not _is_ddp, transform=val_tf
-        )
-
-    elif dataset_key == "cifar100":
+    if dataset_key == "cifar100":
         if _is_ddp:
             if _rank == 0:
                 torchvision.datasets.CIFAR100(
@@ -164,10 +145,7 @@ def load_data(
             root=data_dir, train=False, download=not _is_ddp, transform=val_tf
         )
 
-    elif dataset_key in (
-        "imagenet", "imagenet1k",
-        "imagenet_hf", "imagenet1k_hf", "hf_imagenet",
-    ):
+    elif dataset_key == "imagenet1k":
         train_path = os.path.join(data_dir, "train")
         val_path = os.path.join(data_dir, "val")
         if os.path.isdir(train_path) and os.path.isdir(val_path):
@@ -202,7 +180,7 @@ def load_data(
     else:
         raise ValueError(
             f"Unknown dataset '{dataset}'. "
-            "Supported values: 'cifar10', 'cifar100', 'imagenet', 'imagenet1k', 'imagenet_hf'."
+            "Supported values: 'cifar100', 'imagenet1k'."
         )
 
     _loader_kwargs = dict(

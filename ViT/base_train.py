@@ -2,11 +2,8 @@
 base_train.py — ViT entropy-collapse training script.
 
 Default config: ViT-B/16 on CIFAR-100 with a DeiT recipe (see TrainConfig).
-Select a different preset via ``config=<name>``; available presets:
-  cifar100_base | imagenet1k_base | cifar100_large | imagenet1k_large |
-  cifar100_huge | imagenet1k_huge
 
-Logged every iteration:
+Logged every ``log_interval``:
   * Train loss / accuracy
   * Learning rate
 
@@ -14,15 +11,15 @@ Logged every ``eval_interval``:
   * Val loss / accuracy
 
 Logged every ``hessian_intv``:
-  * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher, KFAC
-    (+ BFGS / FD when compute_fd=True)
+  * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher
+    (+  KFAC, BFGS and FD when compute_fd=True)
 
 Logged every ``entropy_intv``:
   * Per-layer attention entropy
 
 Usage
 -----
-Default (ViT-B/16, CIFAR-100)::
+Default - pilot run (ViT-B/16, CIFAR-100)::
 
     python base_train.py
 
@@ -32,14 +29,12 @@ Named preset::
 
 Override individual fields::
 
-    python base_train.py --lr 5e-4 --max_it 10000 hessian_intv=100
+    python base_train.py config=imagenet1k_base --lr 3e-4 --max_it 15000 
 
 Multi-GPU via torchrun::
 
-    torchrun --nproc_per_node=4 base_train.py config=imagenet1k_base \\
-        data_dir=/data/imagenet --wandb true
+    torchrun --nproc_per_node=4 base_train.py config=imagenet1k_base 
 
-Key=value arguments are ast.literal_eval'd (NanoGPT-style).
 Argparse shortcuts: --lr, --optim, --max_it, --wandb, --cp, --temp_shift.
 """
 
@@ -97,7 +92,7 @@ for _arg in sys.argv[1:]:
 
 cfg = _config_cls()
 
-# NanoGPT-style CLI overrides: python base_train.py learning_rate=1e-4 ...
+# CLI overrides: python base_train.py learning_rate=1e-4 ...
 # Short argparse flags are also supported, e.g. ``--lr 1e-4 --optim adamw``.
 for arg in sys.argv[1:]:
     if "=" in arg:
@@ -164,17 +159,9 @@ _maybe_set("temp_shift_step", known_args.temp_shift)
 
 def _dataset_defaults(dataset_name: str) -> tuple[int, int] | None:
     ds = dataset_name.lower()
-    if ds == "cifar10":
-        return 10, 32
     if ds == "cifar100":
         return 100, 32
-    if ds in (
-        "imagenet",
-        "imagenet1k",
-        "imagenet_hf",
-        "imagenet1k_hf",
-        "hf_imagenet",
-    ):
+    if ds == "imagenet1k":
         return 1000, 224
     return None
 
@@ -787,17 +774,19 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from common.plot_history import plot_history  
+    from common.plot_results import plot_results  
 
-    plot_history(
+    plot_results(
         pkl_path=history_path,
-        out_dir=run_out_dir,
+        save_path=os.path.join(run_out_dir, f"plot_results_22.png"),
         hessian_intv=cfg.hessian_intv,
         entropy_intv=cfg.entropy_intv,
         skip_intv=True,
-        lam=10.0,
+        vs_H_prec=True, 
         compute_fd=cfg.compute_fd,
+        fmt="png",
     )
+    
 # ---------------------------------------------------------------------------
 # 12.  DDP teardown
 # ---------------------------------------------------------------------------

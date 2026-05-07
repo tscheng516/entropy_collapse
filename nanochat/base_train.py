@@ -3,56 +3,30 @@ base_train.py — nanochat entropy-collapse training script.
 
 Trains a nanochat GPT with HookedGPT attention caching, logging per-layer
 attention entropy and nine curvature proxy metrics (λ_max of H, Prec_H,
-H_VV, GN, Diag_H, Fisher, KFAC; + BFGS / FD when compute_fd=True).
+H_VV, GN, Diag_H, Fisher, + KFAC / BFGS / FD when compute_fd=True).
 
-Preset configs (depth is the single complexity dial):
-  d8  | 8-layer  ~30 M  — quick iteration (~3 min on 8×H100)
-  d12 | 12-layer ~85 M  — standard research run (default)
-  d24 | 24-layer ~350 M — GPT-2 scale speedrun
 
 Usage
 -----
-Default (d12, ~85 M params)::
+Pilot (d6):
 
-    python nanochat/base_train.py
+    python base_train.py
 
 Named preset::
 
-    python nanochat/base_train.py config=d8
+    python base_train.py config=d12
 
 Override individual fields::
 
-    python nanochat/base_train.py config=d12 learning_rate=1e-4 max_iters=5000
+    python base_train.py config=d12 learning_rate=1e-4 max_iters=5000
 
 Multi-GPU via torchrun::
 
-    torchrun --nproc_per_node=4 nanochat/base_train.py config=d12
+    torchrun --nproc_per_node=4 base_train.py config=d12
 
 Key=value arguments are ast.literal_eval'd (NanoGPT-style).
 Argparse shortcuts: --lr, --optim, --max_it, --wandb, --cp, --temp_shift.
 
-Prerequisites
--------------
-1. Clone nanochat at the pinned SHA and install its uv environment::
-
-       git clone https://github.com/karpathy/nanochat
-       cd nanochat && git checkout 0aaca56
-       uv sync --extra gpu
-       uv pip install -r ../entropy_collapse/nanochat/requirements.txt
-
-2. Download ClimbMix data shards (inside the nanochat clone)::
-
-       python -m nanochat.dataset
-
-3. Set ``nanochat_dir=<path>`` (default: ``nanochat/nanochat_repo``).
-
-Precision note
---------------
-nanochat manages compute dtype globally via ``COMPUTE_DTYPE`` and casts
-Linear weights to ``x.dtype`` in each forward.  We therefore do **not** use
-``torch.amp.autocast``; instead a ``nullcontext()`` is used throughout.  The
-HVP graph still flows through bf16 weight casts, which is sufficient for
-λ_max trend monitoring.
 """
 
 from __future__ import annotations
@@ -518,8 +492,6 @@ if cfg.wandb_log:
 from common.helpers import (  # noqa: E402
     get_VV_subspace_mask,
     get_attention_entropy,
-)
-from src.helpers import (  # noqa: E402
     get_curvature_metrics,
 )
 
@@ -776,19 +748,19 @@ if not use_ddp or rank == 0:
 # 12.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from common.plot_history import plot_history  # noqa: E402
+    from common.plot_results import plot_results  
 
-    plot_history(
+    plot_results(
         pkl_path=history_path,
-        out_dir=run_out_dir,
+        save_path=os.path.join(run_out_dir, f"plot_results_22.png"),
         hessian_intv=cfg.hessian_intv,
         entropy_intv=cfg.entropy_intv,
         skip_intv=True,
-        lam=10.0,
+        vs_H_prec=True, 
         compute_fd=cfg.compute_fd,
-        task="lm",
+        fmt="png",
     )
-
+    
 # ---------------------------------------------------------------------------
 # 13.  DDP teardown
 # ---------------------------------------------------------------------------

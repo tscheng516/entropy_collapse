@@ -2,7 +2,7 @@
 Training configuration for the ViT entropy-collapse experiments.
 
 Default config (``TrainConfig``) is ViT-B/16 on CIFAR-100 with a DeiT recipe.
-Run ``python base_train.py`` to use it directly.
+``python base_train.py`` for a pilot run directly.
 
 Named presets (``CONFIGS`` registry)
 -------------------------------------
@@ -10,15 +10,6 @@ Named presets (``CONFIGS`` registry)
 |----------------------|----------|-------------|-------------------------|
 | ``cifar100_base``    | ViT-B/16 | CIFAR-100   | same as default + paths |
 | ``imagenet1k_base``  | ViT-B/16 | ImageNet-1k | DeiT recipe             |
-| ``cifar100_large``   | ViT-L/16 | CIFAR-100   | patch_size=4            |
-| ``imagenet1k_large`` | ViT-L/16 | ImageNet-1k |                         |
-| ``cifar100_huge``    | ViT-H/14 | CIFAR-100   | patch_size=4            |
-| ``imagenet1k_huge``  | ViT-H/14 | ImageNet-1k |                         |
-
-Select a preset via the CLI::
-
-    python base_train.py config=imagenet1k_base
-    python base_train.py config=cifar100_large --lr 5e-4
 """
 
 from __future__ import annotations
@@ -29,13 +20,8 @@ import time
 
 
 _DATASET_DEFAULTS: dict[str, dict[str, int]] = {
-    "cifar10": {"num_classes": 10, "img_size": 32},
     "cifar100": {"num_classes": 100, "img_size": 32},
-    "imagenet": {"num_classes": 1000, "img_size": 224},
     "imagenet1k": {"num_classes": 1000, "img_size": 224},
-    "imagenet_hf": {"num_classes": 1000, "img_size": 224},
-    "imagenet1k_hf": {"num_classes": 1000, "img_size": 224},
-    "hf_imagenet": {"num_classes": 1000, "img_size": 224},
 }
 
 
@@ -55,7 +41,7 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Weights & Biases
     # ------------------------------------------------------------------ #
-    wandb_log: bool = False # diabled in pilot test with default config
+    wandb_log: bool = False # disabled in pilot run with default config
     wandb_project: str = "entropy-collapse-vit"
     wandb_run_name: str = "run"
 
@@ -63,14 +49,13 @@ class TrainConfig:
     # Data
     # ------------------------------------------------------------------ #
     dataset: str = "cifar100"
-    # 'cifar10' | 'cifar100' | 'imagenet1k' | 'imagenet_hf'
 
     data_dir: str = "./data"
     # CIFAR: torchvision download root.
     # ImageNet: directory with train/ and val/ in ImageFolder layout.
     # ImageNet HF: Hugging Face cache directory.
 
-    batch_size: int = 32 # small batch size for pilot test; increase to 256 for main experiments
+    batch_size: int = 32 # small batch size for pilot run; increase to 256 for main experiments
     num_workers: int = 8
 
     # ------------------------------------------------------------------ #
@@ -103,13 +88,12 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     # Optimiser
     # ------------------------------------------------------------------ #
-    optimizer: str = "adamw"            # 'adamw' | 'sgd'
+    optimizer: str = "adamw" 
     learning_rate: float = 3e-4
-    max_iters: int = 100
+    max_iters: int = 100 # small number for pilot run; increase to 20 000+ for main experiments
     weight_decay: float = 0.05
     beta1: float = 0.9
     beta2: float = 0.999
-    # beta2=0.999 is the DeiT/ViT standard; 0.95 suits GPT-style LMs.
     grad_clip: float = 1.0
     eps: float = 1e-8
 
@@ -155,7 +139,7 @@ class TrainConfig:
     seed: int = 1337
 
     def __post_init__(self) -> None:
-        _VALID_DTYPES = {"float32", "bfloat16", "float16", "float8"}
+        _VALID_DTYPES = {"float32", "bfloat16", "float16", "float8", "float8_e4m3fn", "float8_e5m2"}
         if self.dtype not in _VALID_DTYPES:
             raise ValueError(
                 f"dtype must be one of {sorted(_VALID_DTYPES)}, got '{self.dtype}'."
@@ -229,13 +213,8 @@ class ViTBaseImageNet1kConfig(TrainConfig):
     patch_size=16 on 224×224 → 196 patches.  50 000 iters × batch 256 ≈ 64 epochs.
 
     Usage::
-
-
         python base_train.py config=imagenet1k_base
 
-    Override individual fields::
-
-        python base_train.py config=imagenet1k_base --lr 5e-4 max_iters=100000
     """
 
     # ----- Data -----
@@ -278,207 +257,10 @@ class ViTBaseImageNet1kConfig(TrainConfig):
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
-@dataclass
-class ViTLargeCIFAR100Config(TrainConfig):
-    """ViT-L/16 on CIFAR-100. patch_size=4 on 32×32 → 64 patches. ~307 M params.
-
-    Usage::
-
-        python base_train.py config=cifar100_large
-    """
-
-    # ----- Data -----
-    dataset: str = "cifar100"
-    num_classes: int = 100
-    batch_size: int = 256
-
-    # ----- Image / patch -----
-    img_size: int = 32
-    patch_size: int = 4
-
-    # ----- Architecture -----
-    model_name: str = "vit_large_patch16_224"
-    depth: int = 24
-    num_heads: int = 16
-    embed_dim: int = 1024
-
-    # ----- Init -----
-    init_std: float = 0.02
-    use_scaled_init: bool = True
-    label_smoothing: float = 0.1
-
-    # ----- Optimiser -----
-    learning_rate: float = 1e-4   # lower LR for larger model
-    weight_decay: float = 0.05
-    beta2: float = 0.999
-    eps: float = 1e-8
-
-    # ----- Schedule -----
-    max_iters: int = 50000
-    warmup_iters: int = 2000
-    lr_decay_iters: int = 50000
-    min_lr: float = 1e-6
-
-    # ----- Output -----
-    out_dir: str = "out/cifar100/vitl14"
-    wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-cifar100"
-    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
-
-
-@dataclass
-class ViTLargeImageNet1kConfig(TrainConfig):
-    """ViT-L/16 on ImageNet-1k. patch_size=16 on 224×224 → 196 patches. ~307 M params.
-
-    Usage::
-
-        python base_train.py config=imagenet1k_large
-    """
-
-    # ----- Data -----
-    dataset: str = "imagenet1k"
-    num_classes: int = 1000
-    batch_size: int = 256
-    num_workers: int = 8
-
-    # ----- Image / patch -----
-    img_size: int = 224
-    patch_size: int = 16
-
-    # ----- Architecture -----
-    model_name: str = "vit_large_patch16_224"
-    depth: int = 24
-    num_heads: int = 16
-    embed_dim: int = 1024
-
-    # ----- Init -----
-    init_std: float = 0.02
-    use_scaled_init: bool = True
-    label_smoothing: float = 0.1
-
-    # ----- Optimiser -----
-    learning_rate: float = 1e-4
-    weight_decay: float = 0.05
-    beta2: float = 0.999
-    eps: float = 1e-8
-
-    # ----- Schedule -----
-    max_iters: int = 50000
-    warmup_iters: int = 5000
-    lr_decay_iters: int = 50000
-    min_lr: float = 1e-6
-
-    # ----- Output -----
-    out_dir: str = "out/imagenet1k/vitl14"
-    wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-imagenet1k"
-    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
-
-
-@dataclass
-class ViTHugeCIFAR100Config(TrainConfig):
-    """ViT-H/14 on CIFAR-100. patch_size=4 on 32×32 → 64 patches. ~632 M params.
-
-    Usage::
-
-        python base_train.py config=cifar100_huge
-    """
-
-    # ----- Data -----
-    dataset: str = "cifar100"
-    num_classes: int = 100
-    batch_size: int = 256          # very large model; reduce further if OOM
-
-    # ----- Image / patch -----
-    img_size: int = 32
-    patch_size: int = 4
-
-    # ----- Architecture -----
-    model_name: str = "vit_huge_patch14_224"
-    depth: int = 32
-    num_heads: int = 16
-    embed_dim: int = 1280
-
-    # ----- Init -----
-    init_std: float = 0.02
-    use_scaled_init: bool = True
-    label_smoothing: float = 0.1
-
-    # ----- Optimiser -----
-    learning_rate: float = 1e-4   # conservative LR for very large model
-    weight_decay: float = 0.05
-    beta2: float = 0.999
-    eps: float = 1e-8
-
-    # ----- Schedule -----
-    max_iters: int = 50000
-    warmup_iters: int = 2000
-    lr_decay_iters: int = 50000
-    min_lr: float = 1e-6
-
-    # ----- Output -----
-    out_dir: str = "out/cifar100/vith14"
-    wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-cifar100"
-    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
-
-
-@dataclass
-class ViTHugeImageNet1kConfig(TrainConfig):
-    """ViT-H/14 on ImageNet-1k. patch_size=14 on 224×224 → 256 patches. ~632 M params.
-
-    Usage::
-
-        python base_train.py config=imagenet1k_huge
-    """
-
-    # ----- Data -----
-    dataset: str = "imagenet1k"
-    num_classes: int = 1000
-    batch_size: int = 256
-    num_workers: int = 8
-
-    # ----- Image / patch -----
-    img_size: int = 224
-    patch_size: int = 14          # 224/14 = 16 → 256 patches
-
-    # ----- Architecture -----
-    model_name: str = "vit_huge_patch14_224"
-    depth: int = 32
-    num_heads: int = 16
-    embed_dim: int = 1280
-
-    # ----- Init -----
-    init_std: float = 0.02
-    use_scaled_init: bool = True
-    label_smoothing: float = 0.1
-
-    # ----- Optimiser -----
-    learning_rate: float = 1e-4
-    weight_decay: float = 0.05
-    beta2: float = 0.999
-    eps: float = 1e-8
-
-    # ----- Schedule -----
-    max_iters: int = 50000
-    warmup_iters: int = 5000
-    lr_decay_iters: int = 50000
-    min_lr: float = 1e-6
-
-    # ----- Output -----
-    out_dir: str = "out/imagenet1k/vith14"
-    wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-imagenet1k"
-    wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
-
 
 # Registry — add entries here to expose new presets to the CLI.
 CONFIGS: dict[str, type[TrainConfig]] = {
     "default":           TrainConfig,
     "cifar100_base":     ViTBaseCIFAR100Config,
     "imagenet1k_base":   ViTBaseImageNet1kConfig,
-    "cifar100_large":    ViTLargeCIFAR100Config,
-    "imagenet1k_large":  ViTLargeImageNet1kConfig,
-    "cifar100_huge":     ViTHugeCIFAR100Config,
-    "imagenet1k_huge":   ViTHugeImageNet1kConfig,
 }

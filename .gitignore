@@ -13,7 +13,6 @@ nohup.out
 # NanoGPT clone (fetched at runtime)
 nanoGPT/
 
-
 wandb/
 claude/
 data/
