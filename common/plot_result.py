@@ -526,7 +526,7 @@ def main() -> None:
             "Figure layout: "
             "'12' = 1×2 thumbnail (avg-entropy|curvature-subset), "
             "'15' = 1×5 detailed (loss|entropy|curvature|ref-vs-proxy|ref-vs-entropy), "
-            "'22' = 2×2 square (entropy|curvature||ref-vs-entropy|ref-vs-proxy),, "
+            "'22' = 2×2 square (entropy|curvature||ref-vs-entropy|ref-vs-proxy), "
             "'13' = 1×3 compact (entropy|curvature|ref-vs-proxy)."
         ),
     )
