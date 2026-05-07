@@ -55,6 +55,7 @@ def plot_results(
     """
     Layout modes
     ------------
+    "12" — 1×2: avg entropy (thumbnail) | curvature subset (H, Prec_H, H_VV, GN)
     "15" — 1×5: loss | entropy | curvature | ref vs proxies | ref vs entropy
     "22" — 2×2: entropy (top-left) | curvature (top-right)
                 ref vs entropy (bottom-left) | ref vs proxies (bottom-right)
@@ -75,7 +76,11 @@ def plot_results(
     with open(pkl_path, "rb") as fh:
         history = pickle.load(fh)
 
-    if layout == "22":
+    if layout == "12":
+        fig, (_a0, _a1) = plt.subplots(1, 2, figsize=(14, 6))
+        # avg entropy | curvature subset (H, Prec_H, H_VV, GN)
+        axs = [None, _a0, _a1, None, None]
+    elif layout == "22":
         fig, ((_sq00, _sq01), (_sq10, _sq11)) = plt.subplots(2, 2, figsize=(14, 12))
         # (0,0)=entropy  (0,1)=curvature
         # (1,0)=ref vs entropy  (1,1)=ref vs proxies
@@ -199,11 +204,17 @@ def plot_results(
     ax_ent = axs[1]
     if entropies.ndim == 2 and entropies.shape[1] > 0:
         n_layers = entropies.shape[1]
-        colors_ent = plt.cm.viridis(np.linspace(0, 1, n_layers))
-        for li in range(n_layers):
-            ax_ent.plot(ent_idx_arr, entropies[:, li],
-                        color=colors_ent[li], label=f"Layer {li + 1}")
-    ax_ent.set_title("Attention Entropy", fontsize=24)
+        if layout == "12":
+            # Thumbnail mode: plot average entropy as a single bold line
+            ent_avg = entropies.mean(axis=1)
+            ax_ent.plot(ent_idx_arr, ent_avg, color="steelblue", linewidth=3,
+                        label="Avg. entropy")
+        else:
+            colors_ent = plt.cm.viridis(np.linspace(0, 1, n_layers))
+            for li in range(n_layers):
+                ax_ent.plot(ent_idx_arr, entropies[:, li],
+                            color=colors_ent[li], label=f"Layer {li + 1}")
+    ax_ent.set_title("Avg. Attention Entropy over all layers" if layout == "12" else "Attention Entropy", fontsize=24)
     ax_ent.set_xlabel(_ent_xlabel, fontsize=20)
     # ax_ent.set_ylabel("Entropy (nats)", fontsize=20)
     ax_ent.legend(fontsize="medium", loc="best", ncol=2)
@@ -213,20 +224,29 @@ def plot_results(
     # Panel 2 — Raw curvature metric traces (log y)
     # ------------------------------------------------------------------
     ax_curv = axs[2]
-    _metric_specs = [
-        (h_arr,      h_idx,      "red",       "-",   "Exact Hessian (H)"),
-        (prec_arr,   prec_idx,   "purple",    "--",  r"Precond. Hessian ($\tilde{H}$)"),
-        (gn_arr,     gn_idx,     "brown",     "--",  r"Gauss-Newton ($H^{GN}$)"),
-        (vv_arr,     vv_idx,     "magenta",   ":",   r"Value Subspace ($H_{VV}$)"),
-        (diag_arr,   diag_idx,   "teal",      "-.",  "Diag Hessian"),
-        (fisher_arr, fisher_idx, "olive",     "-.",  "Empirical Fisher"),
-        (kfac_arr,   kfac_idx,   "darkgreen", ":",   "K-FAC"),
-    ]
-    if compute_fd:
-        _metric_specs += [
-            (bfgs_arr, bfgs_idx, "navy", ":",  "BFGS"),
-            (fd_arr,   fd_idx,   "cyan", "-.", "FD"),
+    if layout == "12":
+        # Thumbnail mode: show only the key subset of proxies
+        _metric_specs = [
+            (h_arr,    h_idx,    "red",     "-",  "H"),
+            (prec_arr, prec_idx, "purple",  "--", r"$\tilde{H}$"),
+            (vv_arr,   vv_idx,   "magenta", ":",  r"$H_{VV}$"),
+            (gn_arr,   gn_idx,   "brown",   "--", r"$H^{GN}$"),
         ]
+    else:
+        _metric_specs = [
+            (h_arr,      h_idx,      "red",       "-",   "Exact Hessian (H)"),
+            (prec_arr,   prec_idx,   "purple",    "--",  r"Precond. Hessian ($\tilde{H}$)"),
+            (gn_arr,     gn_idx,     "brown",     "--",  r"Gauss-Newton ($H^{GN}$)"),
+            (vv_arr,     vv_idx,     "magenta",   ":",   r"Value Subspace ($H_{VV}$)"),
+            (diag_arr,   diag_idx,   "teal",      "-.",  "Diag Hessian"),
+            (fisher_arr, fisher_idx, "olive",     "-.",  "Empirical Fisher"),
+            (kfac_arr,   kfac_idx,   "darkgreen", ":",   "K-FAC"),
+        ]
+        if compute_fd:
+            _metric_specs += [
+                (bfgs_arr, bfgs_idx, "navy", ":",  "BFGS"),
+                (fd_arr,   fd_idx,   "cyan", "-.", "FD"),
+            ]
     for arr, idx, color, ls, label in _metric_specs:
         if _has_positive_finite(arr):
             ax_curv.plot(idx, arr, color=color, linestyle=ls,
@@ -488,9 +508,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--layout", type=str, default="22",
-        choices=["15", "22", "13"],
+        choices=["12", "15", "22", "13"],
         help=(
             "Figure layout: "
+            "'12' = 1×2 thumbnail (avg-entropy|curvature-subset), "
             "'15' = 1×5 detailed (loss|entropy|curvature|ref-vs-proxy|ref-vs-entropy), "
             "'22' = 2×2 square (default), "
             "'13' = 1×3 compact (entropy|curvature|ref-vs-proxy)."
