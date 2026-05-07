@@ -7,25 +7,28 @@ This repository investigates the relationship between attention entropy collapse
 ## Repository layout
 
 ```
-entropy_collapse_supp/
+entropy_collapse/
 │
 ├── common/                     # Shared utilities used by both experiments
 │   ├── helpers.py              # Curvature metrics and attention-entropy helpers
-│   ├── plot_results.py         # Post-training plotting utilities
+│   ├── plot_result.py          # Post-training plotting utilities
+│   ├── train_utils.py          # Shared training helpers
 │   └── __init__.py
 │
 ├── ViT/                        # Vision Transformer experiments
-│   ├── base_train.py           # Training entry point for ViT 
+│   ├── base_train.py           # Training entry point for ViT
+│   ├── train.sh                # Launch script for ViT training
 │   ├── configs/                # Experiment configuration flags
 │   │   └── train_config.py
-│   ├── src/                    
+│   ├── src/
 │   │   ├── model.py            # HookedViT (timm-based) with attention caching
 │   │   └── data_utils.py       # CIFAR / ImageNet data loaders and transforms
-│   ├── requirement.txt         # Python deps for ViT
+│   ├── requirements.txt        # Python deps for ViT
 │   └── README.md               # ViT-specific instructions
 │
 ├── nanochat/                   # GPT-style language model experiments
 │   ├── base_train.py           # Training entry point for nanochat
+│   ├── train.sh                # Launch script for nanochat training
 │   ├── configs/                # Experiment configuration flags
 │   │   └── train_config.py
 │   ├── src/
@@ -33,6 +36,7 @@ entropy_collapse_supp/
 │   ├── requirements.txt        # Python deps for nanochat
 │   └── README.md               # nanochat-specific instructions
 │
+├── figure/                     # Output figures
 └── README.md                   # This file (overview)
 ```
 
