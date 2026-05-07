@@ -3,10 +3,12 @@ from common.helpers import (
     get_VV_subspace_mask,
     get_curvature_metrics,
     get_attention_entropy,
+    strip_compile_prefix,
 )
 
 __all__ = [
     "get_VV_subspace_mask",
     "get_curvature_metrics",
     "get_attention_entropy",
+    "strip_compile_prefix",
 ]

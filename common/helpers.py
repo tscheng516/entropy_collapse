@@ -501,3 +501,16 @@ def get_attention_entropy(model: torch.nn.Module) -> list[float]:
         else:
             layer_entropies.append(0.0)
     return layer_entropies
+
+
+# ==========================================================================
+# Checkpoint utilities
+# ==========================================================================
+
+
+def strip_compile_prefix(state_dict: dict) -> dict:
+    """Remove the ``_orig_mod.`` key prefix added by ``torch.compile``."""
+    return {
+        (k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v
+        for k, v in state_dict.items()
+    }
