@@ -15,6 +15,9 @@ Usage
 
   # Override output directory
   python common/plot_results.py ViT/ -o /tmp/figures
+  
+  Called by base_train.py: output result.{fmt}
+  Called by plot_results.py: output results_{layout}.{fmt}
 """
 
 from __future__ import annotations
@@ -517,13 +520,13 @@ def main() -> None:
         help="Use Prec_H as reference in correlation (default: H).",
     )
     parser.add_argument(
-        "--layout", type=str, default="22",
+        "--layout", type=str, default="15",
         choices=["12", "15", "22", "13"],
         help=(
             "Figure layout: "
             "'12' = 1×2 thumbnail (avg-entropy|curvature-subset), "
             "'15' = 1×5 detailed (loss|entropy|curvature|ref-vs-proxy|ref-vs-entropy), "
-            "'22' = 2×2 square (default), "
+            "'22' = 2×2 square (entropy|curvature||ref-vs-entropy|ref-vs-proxy),, "
             "'13' = 1×3 compact (entropy|curvature|ref-vs-proxy)."
         ),
     )
@@ -544,7 +547,7 @@ def main() -> None:
     for i, pkl in enumerate(pkl_paths, 1):
         print(f"[plot_results] [{i}/{len(pkl_paths)}] {pkl}")
 
-        _suffix = f"plot_results_{args.layout}.{args.fmt}"
+        _suffix = f"results_{args.layout}.{args.fmt}"
         if single and args.out:
             save_path = args.out
         elif args.out:

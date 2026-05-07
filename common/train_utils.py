@@ -197,7 +197,7 @@ def save_history_and_plot(
 
     plot_results(
         pkl_path=history_path,
-        save_path=os.path.join(run_out_dir, "plot_results_22.png"),
+        save_path=os.path.join(run_out_dir, "results.png"),
         hessian_intv=cfg.hessian_intv,
         entropy_intv=cfg.entropy_intv,
         skip_intv=True,
