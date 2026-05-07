@@ -237,7 +237,7 @@ def plot_raw(
             for li in range(n_layers):
                 ax_ent.plot(ent_idx_arr, entropies[:, li],
                             color=colors_ent[li], label=f"Layer {li + 1}")
-    ax_ent.set_title("Avg. Attention Entropy", fontsize=24)
+    ax_ent.set_title("Avg. Attention Entropy over all layers", fontsize=24)
     ax_ent.set_xlabel(_ent_xlabel, fontsize=20)
     # ax_ent.set_ylabel("Entropy (nats)", fontsize=20)
     ax_ent.legend(fontsize="medium", loc="best", ncol=2)
