@@ -1,14 +1,23 @@
 """
-thumbnail.py — Produce a compact 1×2 training summary figure from a
-``history.pkl`` file.
+thumbnail.py — DEPRECATED.
+
+Use ``plot_raw.py`` with ``--layout 12`` (or ``layout="12"`` in the API)
+instead::
+
+    python common/plot_raw.py path/to/history.pkl --layout 12
+
+This module is kept for backwards compatibility only and will be removed in a
+future release.
+
+----
+
+Original description: Produce a compact 1×2 training summary figure from a
+``history.pkl`` file using *smoothed* curves.
 
 Layout
 ------
 Left  — Smoothed average attention entropy across all layers.
 Right — Smoothed curvature metrics: H, Prec_H (Ĥ), H_VV, and GN (H^GN).
-
-Styling mirrors ``fig_simple`` in ``plot_curvature_smoothed_comparison``:
-no axis ticks or grid lines, bold titles, legend shown.
 
 Usage
 -----
@@ -23,12 +32,14 @@ As a library::
     fig = plot_thumbnail("path/to/history.pkl", save_path="thumb.pdf")
 """
 
+
 from __future__ import annotations
 
 import argparse
 import os
 import pickle
 import sys
+import warnings
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -80,16 +91,16 @@ def plot_thumbnail(
     fmt: str = "png",
 ) -> plt.Figure:
     """
-    Load ``history.pkl`` and produce a 1×2 thumbnail figure.
-
-    Args:
-        pkl_path:   Path to a ``history.pkl`` produced by any base_train script.
-        lam:        Whittaker–Henderson smoothing strength.
-        save_path:  If provided, save the figure to this path.
-
-    Returns:
-        The matplotlib ``Figure``.
+    .. deprecated::
+        Use :func:`common.plot_raw.plot_raw` with ``layout="12"`` instead.
+        This function uses smoothed curves; the replacement uses raw data.
     """
+    warnings.warn(
+        "plot_thumbnail() is deprecated. "
+        "Use plot_raw(layout='12') from common.plot_raw instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     with open(pkl_path, "rb") as f:
         history = pickle.load(f)
 
@@ -108,7 +119,7 @@ def plot_thumbnail(
                 trend_avg, _, _ = smooth_log_trend(ent_avg, lam=lam, use_abs=True)
                 ax_ent.plot(ent_idx, trend_avg, color="steelblue", linewidth=3,
                             label="Avg. entropy")
-                ax_ent.legend(fontsize="small", loc="best")
+                ax_ent.legend(fontsize="large", loc="best")
 
     # ------------------------------------------------------------------ #
     # Right panel — smoothed curvature metrics: H, Prec_H, H_VV, GN
@@ -132,7 +143,7 @@ def plot_thumbnail(
 
     ax_curv.set_yscale("log")
     ax_curv.minorticks_off()
-    ax_curv.legend(fontsize="small", loc="best")
+    ax_curv.legend(fontsize="large", loc="best")
 
     # ------------------------------------------------------------------ #
     # Shared x limit
@@ -149,10 +160,10 @@ def plot_thumbnail(
     # ------------------------------------------------------------------ #
     # Minimal styling (no ticks, no grid)
     # ------------------------------------------------------------------ #
-    for ax, title in [(ax_ent, "Avg. Attention Entropy"),
+    for ax, title in [(ax_ent, "Avg. Attention Entropy over layers"),
                       (ax_curv, "Curvature Metrics")]:
         ax.set_title(title, fontsize=16, fontweight="bold")
-        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+        # ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
         for sp in ax.spines.values():
             sp.set_visible(True)
 
@@ -193,8 +204,18 @@ def _find_pkl_files(path: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    warnings.warn(
+        "thumbnail.py is deprecated. "
+        "Use 'python common/plot_raw.py <path> --layout 12' instead.",
+        DeprecationWarning,
+        stacklevel=1,
+    )
+    print(
+        "[thumbnail] DEPRECATED: use 'python common/plot_raw.py <path> --layout 12' instead."
+    )
     parser = argparse.ArgumentParser(
-        description="Produce a 1×2 training summary thumbnail from history.pkl."
+        description="[DEPRECATED] Produce a 1×2 training summary thumbnail from history.pkl. "
+                    "Use 'python common/plot_raw.py --layout 12' instead."
     )
     parser.add_argument(
         "pkl_path",

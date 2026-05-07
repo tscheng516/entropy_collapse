@@ -1,14 +1,6 @@
 # Entropy Collapse
 
-This repository investigates the relationship between **attention entropy collapse** and **loss landscape sharpness** across two model families: image classification ViTs and a GPT-style language model.  Each experiment tracks a suite of nine second-order curvature proxies alongside per-layer attention entropy throughout training, enabling correlation and spike co-occurrence analysis between the two phenomena.
-
----
-
-## Research Questions
-
-- Does loss landscape sharpness (λ_max of the Hessian and its proxies) co-vary with attention entropy collapse?
-- Do different curvature proxies — exact HVP, Gauss-Newton, empirical Fisher, K-FAC, finite differences — agree with each other in trend and spike timing?
-- Is the relationship consistent across tasks (classification, depth estimation, language modelling) and architectures (ViT, GPT)?
+This repository investigates the relationship between **attention entropy collapse** and **loss landscape sharpness** across two model families: image classification ViTs and a GPT-style language model.  Each experiment tracks a suite of 6 second-order curvature proxies alongside per-layer attention entropy throughout training, enabling correlation analysis between the two phenomena.
 
 ---
 
