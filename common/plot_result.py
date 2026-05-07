@@ -9,6 +9,9 @@ Usage
   # Entire project folder — walks <folder>/out/ recursively
   python common/plot_results.py ViT/
   python common/plot_results.py nanochat/
+  
+  # smart path handling: absolute or workspace-prefixed paths can be pasted directly
+  python common/plot_result.py /Users/foo/projects/entropy_collapse/ViT/
 
   # Override output directory
   python common/plot_results.py ViT/ -o /tmp/figures
@@ -446,7 +449,14 @@ def _find_pkl_files(path: str) -> list[str]:
     * If *path* is a ``.pkl`` file, return ``[path]``.
     * If *path* is a directory, walk ``<path>/out/`` recursively.
     * If no ``out/`` sub-dir exists, walk *path* itself.
+
+    If the path contains ``entropy_collapse/``, everything up to and including
+    that token is stripped so users can paste absolute or workspace-prefixed
+    paths directly (e.g. from VS Code or a terminal copy-paste).
     """
+    _MARKER = "entropy_collapse/"
+    if _MARKER in path:
+        path = os.path.join(_PROJECT_ROOT, path.split(_MARKER, 1)[1])
     path = os.path.abspath(path)
     if os.path.isfile(path):
         return [path]
