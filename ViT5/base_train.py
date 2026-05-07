@@ -750,14 +750,21 @@ if not use_ddp or rank == 0:
 # 11.  Post-training plots
 # ---------------------------------------------------------------------------
 if not use_ddp or rank == 0:
-    from common.plot_history import plot_history
+    from common.plot_results import plot_results  
 
-    plot_history(
+    plot_results(
         pkl_path=history_path,
-        out_dir=run_out_dir,
+        save_path=os.path.join(run_out_dir, f"plot_results_22.png"),
         hessian_intv=cfg.hessian_intv,
         entropy_intv=cfg.entropy_intv,
         skip_intv=True,
-        lam=10.0,
+        vs_H_prec=True, 
         compute_fd=cfg.compute_fd,
+        fmt="png",
     )
+    
+# ---------------------------------------------------------------------------
+# 12.  DDP teardown
+# ---------------------------------------------------------------------------
+if use_ddp:
+    dist.destroy_process_group()
