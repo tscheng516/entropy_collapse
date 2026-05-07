@@ -38,3 +38,9 @@ entropy_collapse_supp/
 
 Installation, dataset preparation, exact training commands, and result reproduction steps are described in each experiment's README: see [ViT/README.md](ViT/README.md) and [nanochat/README.md](nanochat/README.md).
 
+---
+
+## Results
+
+![fig:base_result](figure/base_result.png)
+While the Hessian proxies and attention entropy are quite uncorrelated in general, they are strongly correlated in the phase of neural collapse due to natural pre-training or manual temperature shift intervention.
