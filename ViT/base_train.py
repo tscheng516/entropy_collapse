@@ -2,11 +2,8 @@
 base_train.py — ViT entropy-collapse training script.
 
 Default config: ViT-B/16 on CIFAR-100 with a DeiT recipe (see TrainConfig).
-Select a different preset via ``config=<name>``; available presets:
-  cifar100_base | imagenet1k_base | cifar100_large | imagenet1k_large |
-  cifar100_huge | imagenet1k_huge
 
-Logged every iteration:
+Logged every ``log_interval``:
   * Train loss / accuracy
   * Learning rate
 
@@ -14,15 +11,15 @@ Logged every ``eval_interval``:
   * Val loss / accuracy
 
 Logged every ``hessian_intv``:
-  * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher, KFAC
-    (+ BFGS / FD when compute_fd=True)
+  * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher
+    (+  KFAC, BFGS and FD when compute_fd=True)
 
 Logged every ``entropy_intv``:
   * Per-layer attention entropy
 
 Usage
 -----
-Default (ViT-B/16, CIFAR-100)::
+Default - pilot run (ViT-B/16, CIFAR-100)::
 
     python base_train.py
 
@@ -32,25 +29,21 @@ Named preset::
 
 Override individual fields::
 
-    python base_train.py --lr 5e-4 --max_it 10000 hessian_intv=100
+    python base_train.py config=imagenet1k_base learning_rate=3e-4 max_iters=15000
 
 Multi-GPU via torchrun::
 
-    torchrun --nproc_per_node=4 base_train.py config=imagenet1k_base \\
-        data_dir=/data/imagenet --wandb true
+    torchrun --nproc_per_node=4 base_train.py config=imagenet1k_base
 
-Key=value arguments are ast.literal_eval'd (NanoGPT-style).
-Argparse shortcuts: --lr, --optim, --max_it, --wandb, --cp, --temp_shift.
+All config fields can be overridden as ``key=value`` arguments.
 """
 
 from __future__ import annotations
 
-import ast
 import os
 import sys
 import math
 import time
-import pickle
 from contextlib import nullcontext
 
 import numpy as np
@@ -72,109 +65,19 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 # ---------------------------------------------------------------------------
-# 1.  Default configuration (loaded from dataclass, then CLI overrides)
+# 1.  Configuration
 # ---------------------------------------------------------------------------
-from configs.train_config import TrainConfig, CONFIGS  
+from configs.train_config import TrainConfig, CONFIGS
+from common.train_utils import resolve_config, setup_ddp_and_run_dir, init_wandb, save_history_and_plot
 
-# Allow ``config=<preset>`` as a CLI argument to select a named config class
-# before the dataclass is instantiated.  This must be parsed first so that
-# preset defaults are in place before individual key=value overrides are
-# applied further below.
-_config_cls = TrainConfig
-for _arg in sys.argv[1:]:
-    if _arg.startswith("config="):
-        _preset = _arg.split("=", 1)[1].strip()
-        if _preset in CONFIGS:
-            _config_cls = CONFIGS[_preset]
-            if _is_master:
-                print(f"[config] using preset '{_preset}' ({_config_cls.__name__})")
-        else:
-            raise ValueError(
-                f"Unknown config preset '{_preset}'. "
-                f"Available presets: {list(CONFIGS.keys())}."
-            )
-        break
-
-cfg = _config_cls()
-
-# NanoGPT-style CLI overrides: python base_train.py learning_rate=1e-4 ...
-# Short argparse flags are also supported, e.g. ``--lr 1e-4 --optim adamw``.
-for arg in sys.argv[1:]:
-    if "=" in arg:
-        key, val = arg.split("=", 1)
-        if key == "config":
-            continue  # already handled above
-        if hasattr(cfg, key):
-            try:
-                setattr(cfg, key, ast.literal_eval(val))
-            except (ValueError, SyntaxError):
-                setattr(cfg, key, val)
-        else:
-            if _is_master:
-                print(f"[warn] unknown config key '{key}', ignoring.")
-
-import argparse
-
-parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument("--cp", type=str)
-parser.add_argument("--optim", type=str)
-parser.add_argument("--lr", type=float)
-parser.add_argument("--bs", type=int)
-parser.add_argument("--max_it", type=int)
-parser.add_argument("--num_workers", type=int)
-parser.add_argument("--hessian_intv", type=int)
-parser.add_argument("--entropy_intv", type=int)
-parser.add_argument("--wandb", type=str)
-parser.add_argument(
-    "--temp_shift",
-    type=int,
-    default=None,
-    metavar="STEP",
-    help=(
-        "Training step at which a one-time temperature-shift intervention is "
-        "applied to all attention heads (-1 disables, default: cfg.temp_shift_step)."
-    ),
-)
-known_args, _ = parser.parse_known_args()
-
-
-def _maybe_set(attr, val, conv=lambda x: x):
-    if val is None:
-        return
-    try:
-        setattr(cfg, attr, conv(val))
-    except Exception:
-        if _is_master:
-            print(f"[warn] failed to set cfg.{attr} from CLI value {val}")
-
-
-_maybe_set("init_from", known_args.cp)
-_maybe_set("optimizer", known_args.optim)
-_maybe_set("learning_rate", known_args.lr)
-_maybe_set("batch_size", known_args.bs)
-_maybe_set("max_iters", known_args.max_it)
-_maybe_set("num_workers", known_args.num_workers)
-_maybe_set("hessian_intv", known_args.hessian_intv)
-_maybe_set("entropy_intv", known_args.entropy_intv)
-if known_args.wandb is not None:
-    sval = str(known_args.wandb).lower()
-    _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
-_maybe_set("temp_shift_step", known_args.temp_shift)
+cfg = resolve_config(TrainConfig, CONFIGS, _is_master)
 
 
 def _dataset_defaults(dataset_name: str) -> tuple[int, int] | None:
     ds = dataset_name.lower()
-    if ds == "cifar10":
-        return 10, 32
     if ds == "cifar100":
         return 100, 32
-    if ds in (
-        "imagenet",
-        "imagenet1k",
-        "imagenet_hf",
-        "imagenet1k_hf",
-        "hf_imagenet",
-    ):
+    if ds == "imagenet1k":
         return 1000, 224
     return None
 
@@ -236,48 +139,7 @@ ctx = (
 
 os.makedirs(cfg.out_dir, exist_ok=True)
 
-# --- Distributed setup (torchrun) -----------------------------------------
-use_ddp = False
-rank = 0
-world_size = 1
-local_rank = 0
-
-if int(os.environ.get("WORLD_SIZE", "1")) > 1:
-    use_ddp = True
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    backend = "nccl" if torch.cuda.is_available() and cfg.device.startswith("cuda") else "gloo"
-    dist.init_process_group(backend=backend)
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-    if torch.cuda.is_available() and cfg.device.startswith("cuda"):
-        torch.cuda.set_device(local_rank)
-        device = f"cuda:{local_rank}"
-
-# Per-run timestamped sub-directory ----------------------------------------
-if cfg.init_from == "resume":
-    run_out_dir = cfg.out_dir
-else:
-    if use_ddp:
-        if rank == 0:
-            run_id = time.strftime("%Y%m%d-%H%M%S")
-        else:
-            run_id = None
-        run_id_list = [run_id]
-        dist.broadcast_object_list(run_id_list, src=0)
-        run_id = run_id_list[0]
-        run_out_dir = os.path.join(cfg.out_dir, run_id)
-        if rank == 0:
-            os.makedirs(run_out_dir, exist_ok=True)
-        dist.barrier()
-    else:
-        run_id = time.strftime("%Y%m%d-%H%M%S")
-        run_out_dir = os.path.join(cfg.out_dir, run_id)
-        os.makedirs(run_out_dir, exist_ok=True)
-    if not cfg.wandb_run_name or cfg.wandb_run_name == "run":
-        cfg.wandb_run_name = run_id
-
-if rank == 0:
-    print(f"[io] outputs → {run_out_dir}")
+use_ddp, rank, world_size, local_rank, device, run_out_dir = setup_ddp_and_run_dir(cfg, _is_master)
 
 # ---------------------------------------------------------------------------
 # 3.  Data
@@ -307,14 +169,6 @@ from src.model import build_hooked_vit, set_attention_temperature
 
 iter_num = 0
 best_val_loss = float("inf")
-
-
-def _strip_compile_prefix(state_dict: dict) -> dict:
-    """Remove the ``_orig_mod.`` key prefix added by ``torch.compile``."""
-    return {
-        (k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v
-        for k, v in state_dict.items()
-    }
 
 
 if cfg.init_from == "scratch":
@@ -369,7 +223,7 @@ elif cfg.init_from == "resume":
         patch_size=checkpoint.get("patch_size"),
         device=device,
     )
-    state_dict = _strip_compile_prefix(checkpoint["model"])
+    state_dict = strip_compile_prefix(checkpoint["model"])
     model.load_state_dict(state_dict)
     iter_num = checkpoint.get("iter_num", 0)
     best_val_loss = checkpoint.get("best_val_loss", float("inf"))
@@ -408,7 +262,7 @@ else:
         patch_size=checkpoint.get("patch_size"),
         device=device,
     )
-    state_dict = _strip_compile_prefix(checkpoint["model"])
+    state_dict = strip_compile_prefix(checkpoint["model"])
     model.load_state_dict(state_dict)
 
 n_params = sum(p.numel() for p in model.parameters()) / 1e6
@@ -481,14 +335,9 @@ def get_lr(it: int) -> float:
 # ---------------------------------------------------------------------------
 # 7.  W&B
 # ---------------------------------------------------------------------------
+init_wandb(cfg, use_ddp, rank)
 if cfg.wandb_log:
     import wandb
-    if not use_ddp or rank == 0:
-        wandb.init(
-            project=cfg.wandb_project,
-            name=cfg.wandb_run_name or None,
-            config=vars(cfg),
-        )
 
 # ---------------------------------------------------------------------------
 # 8.  Helpers: curvature (spectral-norm) metrics & attention entropy
@@ -504,10 +353,11 @@ if cfg.wandb_log:
 #     fisher    — λ_max(F)               empirical Fisher
 #     kfac      — max λ_max(A)·λ_max(G)  K-FAC Kronecker proxy
 # ---------------------------------------------------------------------------
-from common.helpers import (  
+from common.helpers import (
     get_VV_subspace_mask,
     get_curvature_metrics,
     get_attention_entropy,
+    strip_compile_prefix,
 )
 
 # Unwrap DDP to get the underlying module for mask / entropy helpers
@@ -768,38 +618,13 @@ for iter_num in range(iter_num, cfg.max_iters):
             wandb.log(log_dict, step=iter_num)
 
 # ---------------------------------------------------------------------------
-# 10.  Final checkpoint & save history
+# 10.  Final checkpoint & history
 # ---------------------------------------------------------------------------
 _save_checkpoint("final_ckpt")
-
-if not use_ddp or rank == 0:
-    import dataclasses
-    history["config"] = dataclasses.asdict(cfg)
-    history_path = os.path.join(run_out_dir, "history.pkl")
-    with open(history_path, "wb") as f:
-        pickle.dump(history, f)
-    print(f"[done] history saved → {history_path}")
-
-    if cfg.wandb_log:
-        wandb.finish()
+save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank)
 
 # ---------------------------------------------------------------------------
-# 11.  Post-training plots
-# ---------------------------------------------------------------------------
-if not use_ddp or rank == 0:
-    from common.plot_history import plot_history  
-
-    plot_history(
-        pkl_path=history_path,
-        out_dir=run_out_dir,
-        hessian_intv=cfg.hessian_intv,
-        entropy_intv=cfg.entropy_intv,
-        skip_intv=True,
-        lam=10.0,
-        compute_fd=cfg.compute_fd,
-    )
-# ---------------------------------------------------------------------------
-# 12.  DDP teardown
+# 11.  DDP teardown
 # ---------------------------------------------------------------------------
 if use_ddp:
     dist.destroy_process_group()

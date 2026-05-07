@@ -7,21 +7,10 @@ named preset dataclasses.  ``TrainConfig`` is a minimal d6 research run
 (~100 M parameters).  Larger presets mirror the nanochat
 speedrun configurations.
 
-Named presets  (n_embd = depth×64, n_head = n_embd/128 — nanochat formula)
--------------
-| Key   | n_layer | n_embd | n_head  | Use case             |
-|-------|---------|--------|---------|----------------------|
-| d8    |  8      |  512   |  4      |  Quick iteration     |
-| d12   | 12      |  768   |  6      | Default research run |
-| d24   | 24      | 1536   | 12      | GPT-2 scale speedrun |
-
-max_iters calibrated for param:data ratio ≈ 10 on 4 GPUs (train.sh default),
-batch_size=8 per GPU.  Scale proportionally for other GPU counts.
-
 Select a preset on the CLI::
 
-    python nanochat/base_train.py config=d12
-    python nanochat/base_train.py config=d24 --seq_len 2048 
+    python base_train.py config=d12
+    python base_train.py config=d24 --seq_len 2048 
 """
 
 from __future__ import annotations

@@ -3,66 +3,37 @@ base_train.py — nanochat entropy-collapse training script.
 
 Trains a nanochat GPT with HookedGPT attention caching, logging per-layer
 attention entropy and nine curvature proxy metrics (λ_max of H, Prec_H,
-H_VV, GN, Diag_H, Fisher, KFAC; + BFGS / FD when compute_fd=True).
+H_VV, GN, Diag_H, Fisher, + KFAC / BFGS / FD when compute_fd=True).
 
-Preset configs (depth is the single complexity dial):
-  d8  | 8-layer  ~30 M  — quick iteration (~3 min on 8×H100)
-  d12 | 12-layer ~85 M  — standard research run (default)
-  d24 | 24-layer ~350 M — GPT-2 scale speedrun
 
 Usage
 -----
-Default (d12, ~85 M params)::
+Pilot (d6):
 
-    python nanochat/base_train.py
+    python base_train.py
 
 Named preset::
 
-    python nanochat/base_train.py config=d8
+    python base_train.py config=d12
 
 Override individual fields::
 
-    python nanochat/base_train.py config=d12 learning_rate=1e-4 max_iters=5000
+    python base_train.py config=d12 learning_rate=1e-4 max_iters=5000
 
 Multi-GPU via torchrun::
 
-    torchrun --nproc_per_node=4 nanochat/base_train.py config=d12
+    torchrun --nproc_per_node=4 base_train.py config=d12
 
-Key=value arguments are ast.literal_eval'd (NanoGPT-style).
-Argparse shortcuts: --lr, --optim, --max_it, --wandb, --cp, --temp_shift.
+All config fields can be overridden as ``key=value`` arguments.
 
-Prerequisites
--------------
-1. Clone nanochat at the pinned SHA and install its uv environment::
-
-       git clone https://github.com/karpathy/nanochat
-       cd nanochat && git checkout 0aaca56
-       uv sync --extra gpu
-       uv pip install -r ../entropy_collapse/nanochat/requirements.txt
-
-2. Download ClimbMix data shards (inside the nanochat clone)::
-
-       python -m nanochat.dataset
-
-3. Set ``nanochat_dir=<path>`` (default: ``nanochat/nanochat_repo``).
-
-Precision note
---------------
-nanochat manages compute dtype globally via ``COMPUTE_DTYPE`` and casts
-Linear weights to ``x.dtype`` in each forward.  We therefore do **not** use
-``torch.amp.autocast``; instead a ``nullcontext()`` is used throughout.  The
-HVP graph still flows through bf16 weight casts, which is sufficient for
-λ_max trend monitoring.
 """
 
 from __future__ import annotations
 
-import ast
 import os
 import sys
 import math
 import time
-import pickle
 from contextlib import nullcontext
 
 import numpy as np
@@ -88,86 +59,9 @@ if _SCRIPT_DIR not in sys.path:
 # 1.  Configuration
 # ---------------------------------------------------------------------------
 from configs.train_config import TrainConfig, CONFIGS  # noqa: E402
+from common.train_utils import resolve_config, setup_ddp_and_run_dir, init_wandb, save_history_and_plot  # noqa: E402
 
-_config_cls = TrainConfig
-for _arg in sys.argv[1:]:
-    if _arg.startswith("config="):
-        _preset = _arg.split("=", 1)[1].strip()
-        if _preset in CONFIGS:
-            _config_cls = CONFIGS[_preset]
-            if _is_master:
-                print(f"[config] using preset '{_preset}' ({_config_cls.__name__})")
-        else:
-            raise ValueError(
-                f"Unknown config preset '{_preset}'. "
-                f"Available presets: {list(CONFIGS.keys())}."
-            )
-        break
-
-cfg = _config_cls()
-
-# NanoGPT-style key=value overrides
-for arg in sys.argv[1:]:
-    if "=" in arg:
-        key, val = arg.split("=", 1)
-        if key == "config":
-            continue
-        if hasattr(cfg, key):
-            try:
-                setattr(cfg, key, ast.literal_eval(val))
-            except (ValueError, SyntaxError):
-                setattr(cfg, key, val)
-        else:
-            if _is_master:
-                print(f"[warn] unknown config key '{key}', ignoring.")
-
-import argparse  # noqa: E402
-
-parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument("--cp", type=str)
-parser.add_argument("--optim", type=str)
-parser.add_argument("--lr", type=float)
-parser.add_argument("--bs", type=int)
-parser.add_argument("--max_it", type=int)
-parser.add_argument("--num_workers", type=int)
-parser.add_argument("--hessian_intv", type=int)
-parser.add_argument("--entropy_intv", type=int)
-parser.add_argument("--wandb", type=str)
-parser.add_argument(
-    "--temp_shift",
-    type=int,
-    default=None,
-    metavar="STEP",
-    help=(
-        "Training step at which a one-time temperature-shift intervention is "
-        "applied to all attention heads (-1 disables)."
-    ),
-)
-known_args, _ = parser.parse_known_args()
-
-
-def _maybe_set(attr, val, conv=lambda x: x):
-    if val is None:
-        return
-    try:
-        setattr(cfg, attr, conv(val))
-    except Exception:
-        if _is_master:
-            print(f"[warn] failed to set cfg.{attr} from CLI value {val}")
-
-
-_maybe_set("init_from", known_args.cp)
-_maybe_set("optimizer", known_args.optim)
-_maybe_set("learning_rate", known_args.lr)
-_maybe_set("batch_size", known_args.bs)
-_maybe_set("max_iters", known_args.max_it)
-_maybe_set("num_workers", known_args.num_workers)
-_maybe_set("hessian_intv", known_args.hessian_intv)
-_maybe_set("entropy_intv", known_args.entropy_intv)
-if known_args.wandb is not None:
-    sval = str(known_args.wandb).lower()
-    _maybe_set("wandb_log", sval in ("1", "true", "yes", "y"))
-_maybe_set("temp_shift_step", known_args.temp_shift)
+cfg = resolve_config(TrainConfig, CONFIGS, _is_master)
 
 # ---------------------------------------------------------------------------
 # 2.  Add nanochat repo to sys.path so ``nanochat.*`` is importable
@@ -234,48 +128,7 @@ ctx = nullcontext()
 
 os.makedirs(cfg.out_dir, exist_ok=True)
 
-# --- Distributed setup (torchrun) -----------------------------------------
-use_ddp = False
-rank = 0
-world_size = 1
-local_rank = 0
-
-if int(os.environ.get("WORLD_SIZE", "1")) > 1:
-    use_ddp = True
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    backend = "nccl" if torch.cuda.is_available() and cfg.device.startswith("cuda") else "gloo"
-    dist.init_process_group(backend=backend)
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-    if torch.cuda.is_available() and cfg.device.startswith("cuda"):
-        torch.cuda.set_device(local_rank)
-        device = f"cuda:{local_rank}"
-
-# Per-run timestamped sub-directory ----------------------------------------
-if cfg.init_from == "resume":
-    run_out_dir = cfg.out_dir
-else:
-    if use_ddp:
-        if rank == 0:
-            run_id = time.strftime("%Y%m%d-%H%M%S")
-        else:
-            run_id = None
-        run_id_list = [run_id]
-        dist.broadcast_object_list(run_id_list, src=0)
-        run_id = run_id_list[0]
-        run_out_dir = os.path.join(cfg.out_dir, run_id)
-        if rank == 0:
-            os.makedirs(run_out_dir, exist_ok=True)
-        dist.barrier()
-    else:
-        run_id = time.strftime("%Y%m%d-%H%M%S")
-        run_out_dir = os.path.join(cfg.out_dir, run_id)
-        os.makedirs(run_out_dir, exist_ok=True)
-    if not cfg.wandb_run_name or cfg.wandb_run_name == "run":
-        cfg.wandb_run_name = run_id
-
-if rank == 0:
-    print(f"[io] outputs → {run_out_dir}")
+use_ddp, rank, world_size, local_rank, device, run_out_dir = setup_ddp_and_run_dir(cfg, _is_master)
 
 # ---------------------------------------------------------------------------
 # 4.  Data — ClimbMix via nanochat's tokenizing dataloader
@@ -317,14 +170,6 @@ iter_num = 0
 best_val_loss = float("inf")
 
 
-def _strip_compile_prefix(state_dict: dict) -> dict:
-    """Remove the ``_orig_mod.`` key prefix added by ``torch.compile``."""
-    return {
-        (k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v
-        for k, v in state_dict.items()
-    }
-
-
 def _make_gpt_cfg() -> GPTConfig:
     return GPTConfig(
         n_layer=cfg.n_layer,
@@ -359,7 +204,7 @@ elif cfg.init_from == "resume":
             setattr(cfg, _k, checkpoint[_k])
     gpt_cfg = _make_gpt_cfg()
     model = build_hooked_gpt(gpt_cfg, device=device)
-    model.load_state_dict(_strip_compile_prefix(checkpoint["model"]))
+    model.load_state_dict(strip_compile_prefix(checkpoint["model"]))
     iter_num = checkpoint.get("iter_num", 0)
     best_val_loss = checkpoint.get("best_val_loss", float("inf"))
 
@@ -373,7 +218,7 @@ else:
             setattr(cfg, _k, checkpoint[_k])
     gpt_cfg = _make_gpt_cfg()
     model = build_hooked_gpt(gpt_cfg, device=device)
-    model.load_state_dict(_strip_compile_prefix(checkpoint["model"]))
+    model.load_state_dict(strip_compile_prefix(checkpoint["model"]))
 
 n_params = sum(p.numel() for p in model.parameters()) / 1e6
 if _is_master:
@@ -503,14 +348,9 @@ def get_muon_wd(it: int) -> float:
 # ---------------------------------------------------------------------------
 # 8.  W&B
 # ---------------------------------------------------------------------------
+init_wandb(cfg, use_ddp, rank)
 if cfg.wandb_log:
-    import wandb  # noqa: E402
-    if not use_ddp or rank == 0:
-        wandb.init(
-            project=cfg.wandb_project,
-            name=cfg.wandb_run_name or None,
-            config=vars(cfg),
-        )
+    import wandb
 
 # ---------------------------------------------------------------------------
 # 9.  Curvature and entropy helpers
@@ -518,9 +358,8 @@ if cfg.wandb_log:
 from common.helpers import (  # noqa: E402
     get_VV_subspace_mask,
     get_attention_entropy,
-)
-from src.helpers import (  # noqa: E402
     get_curvature_metrics,
+    strip_compile_prefix,
 )
 
 _raw_model = model.module if use_ddp else model
@@ -757,40 +596,13 @@ for iter_num in range(iter_num, cfg.max_iters):
             wandb.log(log_dict, step=iter_num)
 
 # ---------------------------------------------------------------------------
-# 11.  Final checkpoint & save history
+# 11.  Final checkpoint & history
 # ---------------------------------------------------------------------------
 _save_checkpoint("final_ckpt")
-
-if not use_ddp or rank == 0:
-    import dataclasses
-    history["config"] = dataclasses.asdict(cfg)
-    history_path = os.path.join(run_out_dir, "history.pkl")
-    with open(history_path, "wb") as f:
-        pickle.dump(history, f)
-    print(f"[done] history saved → {history_path}")
-
-    if cfg.wandb_log:
-        wandb.finish()
+save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank)
 
 # ---------------------------------------------------------------------------
-# 12.  Post-training plots
-# ---------------------------------------------------------------------------
-if not use_ddp or rank == 0:
-    from common.plot_history import plot_history  # noqa: E402
-
-    plot_history(
-        pkl_path=history_path,
-        out_dir=run_out_dir,
-        hessian_intv=cfg.hessian_intv,
-        entropy_intv=cfg.entropy_intv,
-        skip_intv=True,
-        lam=10.0,
-        compute_fd=cfg.compute_fd,
-        task="lm",
-    )
-
-# ---------------------------------------------------------------------------
-# 13.  DDP teardown
+# 12.  DDP teardown
 # ---------------------------------------------------------------------------
 if use_ddp:
     dist.destroy_process_group()

@@ -1,32 +1,23 @@
 """
-common/plot_raw.py
-------------------
-Produce a single 1 × 5 raw-data summary figure for one or more history.pkl
-files found under a given folder.
-
-Panel layout
-~~~~~~~~~~~~
-  0 — Train + val loss
-  1 — Per-layer attention entropy 
-  2 — Raw curvature metric traces  (log y-scale)
-  3 — Rolling Spearman ρ — H vs each proxy  
-  4 — Rolling Spearman ρ — Prec_H vs each proxy  
-
-Panels 1,2 and 4 mirror the three top panels of
-``plot_curvature_smoothed_comparison`` (row 0).  Panel 3 adds the
-complementary H-as-reference rolling correlation.
+Produce a single subplot summary for one or more history.pkl files found under a given folder.
 
 Usage
 -----
   # Single file
-  python common/plot_raw.py path/to/history.pkl
+  python common/plot_results.py path/to/history.pkl
 
   # Entire project folder — walks <folder>/out/ recursively
-  python common/plot_raw.py ViT/
-  python common/plot_raw.py nanochat/
+  python common/plot_results.py ViT/
+  python common/plot_results.py nanochat/
+  
+  # smart path handling: absolute or workspace-prefixed paths can be pasted directly
+  python common/plot_result.py /Users/foo/projects/entropy_collapse/ViT/
 
   # Override output directory
-  python common/plot_raw.py ViT/ -o /tmp/figures
+  python common/plot_results.py ViT/ -o /tmp/figures
+  
+  Called by base_train.py: output result.{fmt}
+  Called by plot_results.py: output results_{layout}.{fmt}
 """
 
 from __future__ import annotations
@@ -48,12 +39,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats as sp_stats
 
-from common.plotting import (
-    _extract_positive,
-    _extract_positive_2d,
-    _has_positive_finite,
-)
-
 # Half-window width in iteration-index space (matches plot_curvature_smoothed_comparison)
 _ROLLING_HALF = 2500
 
@@ -62,7 +47,7 @@ _ROLLING_HALF = 2500
 # Core plotting function
 # ======================================================================
 
-def plot_raw(
+def plot_results(
     pkl_path: str,
     save_path: str | None = None,
     skip_intv: bool = True,
@@ -81,9 +66,6 @@ def plot_raw(
     "22" — 2×2: entropy (top-left) | curvature (top-right)
                 ref vs entropy (bottom-left) | ref vs proxies (bottom-right)
     "13" — 1×3: entropy | curvature | ref vs proxies
-    """
-    """
-    Produce a 1 × 5 raw-data summary figure for one ``history.pkl``.
 
     Args:
         pkl_path:     Path to the ``history.pkl`` file.
@@ -142,11 +124,12 @@ def plot_raw(
     vv_arr,     vv_idx     = _prep("hessian_vv")
     diag_arr,   diag_idx   = _prep("diag_h")
     fisher_arr, fisher_idx = _prep("fisher")
-    kfac_arr,   kfac_idx   = _prep("kfac")
     if compute_fd:
+        kfac_arr,   kfac_idx   = _prep("kfac")
         bfgs_arr, bfgs_idx = _prep("bfgs")
         fd_arr,   fd_idx   = _prep("fd")
     else:
+        kfac_arr = kfac_idx = np.array([], dtype=int)
         bfgs_arr = bfgs_idx = np.array([], dtype=int)
         fd_arr   = fd_idx   = np.array([], dtype=int)
 
@@ -190,7 +173,7 @@ def plot_raw(
     )
 
     # ------------------------------------------------------------------
-    # Panel 0 — Train + val loss  (omitted in square_plot mode)
+    # Panel 0 — Train + val loss 
     # ------------------------------------------------------------------
     ax_loss = axs[0]  # None when square_plot=True
 
@@ -237,7 +220,7 @@ def plot_raw(
             for li in range(n_layers):
                 ax_ent.plot(ent_idx_arr, entropies[:, li],
                             color=colors_ent[li], label=f"Layer {li + 1}")
-    ax_ent.set_title("Avg. Attention Entropy over all layers", fontsize=24)
+    ax_ent.set_title("Avg. Attention Entropy over all layers" if layout == "12" else "Attention Entropy", fontsize=24)
     ax_ent.set_xlabel(_ent_xlabel, fontsize=20)
     # ax_ent.set_ylabel("Entropy (nats)", fontsize=20)
     ax_ent.legend(fontsize="medium", loc="best", ncol=2)
@@ -267,7 +250,7 @@ def plot_raw(
         ]
         if compute_fd:
             _metric_specs += [
-                (bfgs_arr, bfgs_idx, "navy", ":" , "BFGS"),
+                (bfgs_arr, bfgs_idx, "navy", ":",  "BFGS"),
                 (fd_arr,   fd_idx,   "cyan", "-.", "FD"),
             ]
     for arr, idx, color, ls, label in _metric_specs:
@@ -280,54 +263,6 @@ def plot_raw(
     # ax_curv.set_ylabel("Spectral Norm (λ_max)", fontsize=20)
     ax_curv.legend(fontsize="medium", loc="best")
     ax_curv.grid(True, alpha=0.3, linestyle="--")
-
-    # ------------------------------------------------------------------
-    # Rolling Spearman helper
-    # ------------------------------------------------------------------
-    def _rolling_corr(
-        ref_v: np.ndarray, ref_i: np.ndarray,
-        p_v: np.ndarray,   p_i: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, float]:
-        """
-        Rolling Spearman ρ of ref vs proxy over ±_ROLLING_HALF windows.
-        Returns (iters, spearman_values, whole_run_spearman).
-        """
-        if not _has_positive_finite(ref_v) or not _has_positive_finite(p_v):
-            return np.array([]), np.array([]), float("nan")
-        n = min(ref_v.size, p_v.size)
-        if n < 3:
-            return np.array([]), np.array([]), float("nan")
-        ref_u = ref_v[:n].astype(float)
-        p_u   = p_v[:n].astype(float)
-        idx_u = ref_i[:n]
-        mask_all = np.isfinite(ref_u) & np.isfinite(p_u)
-        sp_whole = (
-            sp_stats.spearmanr(ref_u[mask_all], p_u[mask_all])[0]
-            if mask_all.sum() >= 3 else float("nan")
-        )
-        if idx_u.size == 0 or idx_u[-1] <= 2 * _ROLLING_HALF:
-            return np.array([]), np.array([]), sp_whole
-        roll_iters, roll_sp = [], []
-        for i in range(n):
-            center = idx_u[i]
-            if center < _ROLLING_HALF or center > idx_u[-1] - _ROLLING_HALF:
-                continue
-            lo = int(np.searchsorted(idx_u, center - _ROLLING_HALF))
-            hi = int(np.searchsorted(idx_u, center + _ROLLING_HALF, side="right"))
-            if hi - lo < 3:
-                continue
-            r_w = ref_u[lo:hi]
-            p_w = p_u[lo:hi]
-            mask = np.isfinite(r_w) & np.isfinite(p_w)
-            if mask.sum() < 3:
-                continue
-            roll_iters.append(center)
-            roll_sp.append(sp_stats.spearmanr(r_w[mask], p_w[mask])[0])
-        return (
-            np.asarray(roll_iters, dtype=float),
-            np.asarray(roll_sp,    dtype=float),
-            sp_whole,
-        )
 
     # ------------------------------------------------------------------
     # Panel 3 — Rolling Spearman: reference (H or Prec_H) vs curvature proxies
@@ -361,20 +296,19 @@ def plot_raw(
         ]
 
     ax_sp_ref = axs[3]
-    if ax_sp_ref is not None:
-        for p_v, p_i, color_r, label_r in _proxies3:
-            iters_r, sp_r, sp_w = _rolling_corr(ref_v3, ref_i3, p_v, p_i)
-            if iters_r.size > 0:
-                ax_sp_ref.plot(iters_r, sp_r, color=color_r, linewidth=1.5, label=label_r)
-                if not np.isnan(sp_w):
-                    ax_sp_ref.axhline(sp_w, color=color_r, linewidth=0.8,
-                                      linestyle="--", alpha=0.45)
-        ax_sp_ref.set_title(f"Rolling Spearman ρ — {ref_lbl3} vs Proxy", fontsize=24)
-        ax_sp_ref.set_xlabel(_xlabel, fontsize=20)
-        # ax_sp_ref.set_ylabel("Spearman ρ", fontsize=20)
-        # ax_sp_ref.axhline(0, color="black", linewidth=0.8, linestyle=":")
-        ax_sp_ref.legend(fontsize="medium", loc="best")
-        ax_sp_ref.grid(True, alpha=0.3, linestyle="--")
+    for p_v, p_i, color_r, label_r in _proxies3:
+        iters_r, sp_r, sp_w = _rolling_corr(ref_v3, ref_i3, p_v, p_i)
+        if iters_r.size > 0:
+            ax_sp_ref.plot(iters_r, sp_r, color=color_r, linewidth=1.5, label=label_r)
+            if not np.isnan(sp_w):
+                ax_sp_ref.axhline(sp_w, color=color_r, linewidth=0.8,
+                                  linestyle="--", alpha=0.45)
+    ax_sp_ref.set_title(f"Rolling Spearman ρ — {ref_lbl3} vs Proxy", fontsize=24)
+    ax_sp_ref.set_xlabel(_xlabel, fontsize=20)
+    # ax_sp_ref.set_ylabel("Spearman ρ", fontsize=20)
+    # ax_sp_ref.axhline(0, color="black", linewidth=0.8, linestyle=":")
+    ax_sp_ref.legend(fontsize="medium", loc="best")
+    ax_sp_ref.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
     # Panel 4 — Rolling Spearman: reference metric vs per-layer attention entropy
@@ -417,7 +351,7 @@ def plot_raw(
             if ax is not None:
                 ax.set_xlim(0, _shared_x_max)
 
-    run_name = os.path.basename(os.path.dirname(pkl_path))
+    # run_name = os.path.basename(os.path.dirname(pkl_path))
     # fig.suptitle(f"Raw Analysis — {run_name}", fontsize=13)
     fig.tight_layout()
 
@@ -426,6 +360,86 @@ def plot_raw(
 
     return fig
 
+
+# ======================================================================
+# extraction helper
+# ======================================================================
+
+def _has_positive_finite(arr: np.ndarray | list) -> bool:
+    """Return True when an array contains at least one finite value > 0."""
+    a = np.asarray(arr, dtype=float).ravel()
+    if a.size == 0:
+        return False
+    return bool(np.any(np.isfinite(a) & (a > 0)))
+
+
+def _extract_positive(series: np.ndarray | list) -> tuple[np.ndarray, np.ndarray]:
+    """Extract positive finite values and their original indices."""
+    arr = np.asarray(series, dtype=float).ravel()
+    if arr.size == 0:
+        return np.array([]), np.array([], dtype=int)
+    valid = np.isfinite(arr) & (arr > 0)
+    indices = np.where(valid)[0]
+    return arr[valid], indices
+
+
+def _extract_positive_2d(matrix: np.ndarray | list) -> tuple[np.ndarray, np.ndarray]:
+    """Extract rows where any column has a positive finite value."""
+    arr = np.asarray(matrix, dtype=float)
+    if arr.ndim != 2 or arr.size == 0:
+        return arr, np.arange(max(len(arr), 0), dtype=int)
+    valid_rows = np.any(np.isfinite(arr) & (arr > 0), axis=1)
+    indices = np.where(valid_rows)[0]
+    return arr[valid_rows], indices
+
+
+# ======================================================================
+# rolling correlation helper
+# ======================================================================
+def _rolling_corr(
+    ref_v: np.ndarray, ref_i: np.ndarray,
+    p_v: np.ndarray,   p_i: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    Rolling Spearman ρ of ref vs proxy over ±_ROLLING_HALF windows.
+    Returns (iters, spearman_values, whole_run_spearman).
+    """
+    if not _has_positive_finite(ref_v) or not _has_positive_finite(p_v):
+        return np.array([]), np.array([]), float("nan")
+    n = min(ref_v.size, p_v.size)
+    if n < 3:
+        return np.array([]), np.array([]), float("nan")
+    ref_u = ref_v[:n].astype(float)
+    p_u   = p_v[:n].astype(float)
+    idx_u = ref_i[:n]
+    mask_all = np.isfinite(ref_u) & np.isfinite(p_u)
+    sp_whole = (
+        sp_stats.spearmanr(ref_u[mask_all], p_u[mask_all])[0]
+        if mask_all.sum() >= 3 else float("nan")
+    )
+    if idx_u.size == 0 or idx_u[-1] <= 2 * _ROLLING_HALF:
+        return np.array([]), np.array([]), sp_whole
+    roll_iters, roll_sp = [], []
+    for i in range(n):
+        center = idx_u[i]
+        if center < _ROLLING_HALF or center > idx_u[-1] - _ROLLING_HALF:
+            continue
+        lo = int(np.searchsorted(idx_u, center - _ROLLING_HALF))
+        hi = int(np.searchsorted(idx_u, center + _ROLLING_HALF, side="right"))
+        if hi - lo < 3:
+            continue
+        r_w = ref_u[lo:hi]
+        p_w = p_u[lo:hi]
+        mask = np.isfinite(r_w) & np.isfinite(p_w)
+        if mask.sum() < 3:
+            continue
+        roll_iters.append(center)
+        roll_sp.append(sp_stats.spearmanr(r_w[mask], p_w[mask])[0])
+    return (
+        np.asarray(roll_iters, dtype=float),
+        np.asarray(roll_sp,    dtype=float),
+        sp_whole,
+    )
 
 # ======================================================================
 # Batch helper
@@ -438,7 +452,14 @@ def _find_pkl_files(path: str) -> list[str]:
     * If *path* is a ``.pkl`` file, return ``[path]``.
     * If *path* is a directory, walk ``<path>/out/`` recursively.
     * If no ``out/`` sub-dir exists, walk *path* itself.
+
+    If the path contains ``entropy_collapse/``, everything up to and including
+    that token is stripped so users can paste absolute or workspace-prefixed
+    paths directly (e.g. from VS Code or a terminal copy-paste).
     """
+    _MARKER = "entropy_collapse/"
+    if _MARKER in path:
+        path = os.path.join(_PROJECT_ROOT, path.split(_MARKER, 1)[1])
     path = os.path.abspath(path)
     if os.path.isfile(path):
         return [path]
@@ -459,7 +480,7 @@ def _find_pkl_files(path: str) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate a 1×5 raw-data summary figure for each history.pkl found "
+            "Generate a subplot summary for each history.pkl found "
             "under the given path.  Accepts a single .pkl file or a project "
             "folder whose out/ sub-tree is scanned recursively."
         )
@@ -474,7 +495,7 @@ def main() -> None:
         type=str, default=None,
         help=(
             "Output file path when processing a single pkl, or output directory "
-            "when processing multiple pkls.  Defaults to saving plot_raw.png "
+            "when processing multiple pkls.  Defaults to saving plot_results.png "
             "next to each history.pkl."
         ),
     )
@@ -492,20 +513,20 @@ def main() -> None:
     )
     parser.add_argument(
         "--compute-fd", action="store_true",
-        help="Include BFGS and FD metrics (only if computed during training).",
+        help="Include k-Fac, BFGS and FD metrics (only if computed during training).",
     )
     parser.add_argument(
         "--vs-H-prec", action="store_true",
         help="Use Prec_H as reference in correlation (default: H).",
     )
     parser.add_argument(
-        "--layout", type=str, default="22",
+        "--layout", type=str, default="15",
         choices=["12", "15", "22", "13"],
         help=(
             "Figure layout: "
             "'12' = 1×2 thumbnail (avg-entropy|curvature-subset), "
             "'15' = 1×5 detailed (loss|entropy|curvature|ref-vs-proxy|ref-vs-entropy), "
-            "'22' = 2×2 square (default), "
+            "'22' = 2×2 square (entropy|curvature||ref-vs-entropy|ref-vs-proxy), "
             "'13' = 1×3 compact (entropy|curvature|ref-vs-proxy)."
         ),
     )
@@ -518,15 +539,15 @@ def main() -> None:
 
     pkl_paths = _find_pkl_files(args.path)
     if not pkl_paths:
-        print(f"[plot_raw] no history.pkl found under '{args.path}'")
+        print(f"[plot_results] no history.pkl found under '{args.path}'")
         return
 
     single = len(pkl_paths) == 1
 
     for i, pkl in enumerate(pkl_paths, 1):
-        print(f"[plot_raw] [{i}/{len(pkl_paths)}] {pkl}")
+        print(f"[plot_results] [{i}/{len(pkl_paths)}] {pkl}")
 
-        _suffix = f"plot_raw_{args.layout}.{args.fmt}"
+        _suffix = f"results_{args.layout}.{args.fmt}"
         if single and args.out:
             save_path = args.out
         elif args.out:
@@ -536,7 +557,7 @@ def main() -> None:
         else:
             save_path = os.path.join(os.path.dirname(pkl), _suffix)
 
-        fig = plot_raw(
+        fig = plot_results(
             pkl_path=pkl,
             save_path=save_path,
             skip_intv=not args.no_skip_intv,

@@ -1,13 +1,4 @@
-"""Shared mathematical utilities for all entropy-collapse sub-projects.
-
-Functions
----------
-smooth_log_trend     — Whittaker–Henderson smoother in log-space.
-get_VV_subspace_mask — Binary mask selecting value-projection parameters.
-                       Auto-detects model architecture:
-                         * timm ViT (fused qkv)         — ViT/, ViT5/, ViT_depth/
-                         * nanochat GPT (separate c_v)  — nanochat/
-"""
+# Shared mathematical utilities for all entropy-collapse sub-projects.
 
 from __future__ import annotations
 
@@ -19,65 +10,6 @@ from torch.func import functional_call
 from torch.autograd import functional as autograd_functional
 
 
-# ======================================================================
-# Smooth log-trend extraction
-# ======================================================================
-
-
-def _second_difference_matrix(n: int) -> np.ndarray:
-    """Build the (n-2)×n second-difference operator D."""
-    if n < 3:
-        return np.zeros((0, n), dtype=np.float64)
-    D = np.zeros((n - 2, n), dtype=np.float64)
-    for i in range(n - 2):
-        D[i, i : i + 3] = [1.0, -2.0, 1.0]
-    return D
-
-
-def smooth_log_trend(
-    y: np.ndarray | list,
-    lam: float = 10.0,
-    eps: float = 1e-12,
-    use_abs: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Extract a smooth trend from a positive time-series via regularised
-    least-squares in log-space:
-
-        min_m  ‖log(y) − m‖²  +  λ ‖D m‖²
-
-    D is the second-difference operator; lam controls smoothness
-    (higher → smoother).
-
-    Args:
-        y:       1-D array of (ideally positive) measurements.
-        lam:     Smoothing strength (λ).  10 is a good default.
-        eps:     Floor added before logging to avoid log(0).
-        use_abs: If True, take |y| before logging.
-
-    Returns:
-        trend_raw:  exp(m) — smooth trend on the original scale.
-        trend_log:  m — smooth trend in log-space.
-        log_y:      log(y_safe) — the raw log-series.
-    """
-    y = np.asarray(y, dtype=np.float64)
-    y_safe = np.abs(y) + eps if use_abs else np.maximum(y, eps)
-    log_y = np.log(y_safe)
-    n = len(log_y)
-    if n < 3:
-        return y_safe.copy(), log_y.copy(), log_y.copy()
-    D = _second_difference_matrix(n)
-    A = np.eye(n, dtype=np.float64) + lam * (D.T @ D)
-    trend_log = np.linalg.solve(A, log_y)
-    trend_raw = np.exp(trend_log)
-    return trend_raw, trend_log, log_y
-
-
-# ======================================================================
-# Value-subspace mask — unified across architectures
-# ======================================================================
-
-
 def get_VV_subspace_mask(model: torch.nn.Module) -> torch.Tensor:
     """
     Build a flat binary mask selecting only the value-projection parameters
@@ -85,18 +17,14 @@ def get_VV_subspace_mask(model: torch.nn.Module) -> torch.Tensor:
 
     Architecture is auto-detected from parameter names:
 
-    * **timm ViT** (ViT/, ViT5/, ViT_depth/): Q, K, V are fused into a
+    * ViT: Q, K, V are fused into a
       single ``attn.qkv`` weight of shape ``(3*dim, dim)``.  Value weights
       occupy rows ``2*d : 3*d``.  Optional ``attn.qkv.bias`` handled
       similarly (last third of the bias vector).
 
-    * **nanochat GPT**: Uses separate ``attn.c_q``, ``attn.c_k``,
+    * nanochat: Uses separate ``attn.c_q``, ``attn.c_k``,
       ``attn.c_v`` linear layers.  The entire ``attn.c_v.weight`` tensor
       is selected.
-
-      Note: ``get_curvature_metrics`` in nanochat/src/helpers.py
-      independently rebuilds the mask from ``named_parameters()`` to guard
-      against ``nn.ModuleDict`` memo-dedup issues in some PyTorch builds.
 
     Args:
         model: Any HookedViT or HookedGPT model.
@@ -134,11 +62,6 @@ def get_VV_subspace_mask(model: torch.nn.Module) -> torch.Tensor:
     return torch.cat(mask_parts)
 
 
-# ======================================================================
-# Curvature metrics (classification / CE-loss variant)
-# ======================================================================
-
-
 def get_curvature_metrics(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -148,7 +71,6 @@ def get_curvature_metrics(
     max_iter: int = 10,
     compute_fd: bool = False,
     hessian_batch_size: int = 128,
-    use_grad_ckpt: bool = False,  # kept for API compatibility; has no effect
     label_smoothing: float = 0.0,
 ) -> dict[str, float]:
     """
@@ -169,10 +91,6 @@ def get_curvature_metrics(
       * ``fd``    — λ_max(H) via forward-difference finite differences (O(ε)).
       * ``kfac``  — K-FAC proxy: max λ_max(A)·λ_max(G) across all Linear layers.
 
-    Used by: ViT/, ViT5/.  For depth estimation (SILog) see
-    ``ViT_depth/src/helpers.py``.  For language modelling see
-    ``nanochat/src/helpers.py``.
-
     Args:
         model:              Model, unwrapped from DDP.
         optimizer:          Current optimiser (used to read Adam second moment).
@@ -182,7 +100,6 @@ def get_curvature_metrics(
         max_iter:           Power-iteration steps for λ_max estimation.
         compute_fd:         Enable finite-difference proxies (bfgs, fd) and K-FAC.
         hessian_batch_size: Samples sliced from X/Y for curvature estimation.
-        use_grad_ckpt:      Unused — kept for API compatibility only.
         label_smoothing:    Applied to the diagnostic CE loss.
 
     Returns:
@@ -191,6 +108,16 @@ def get_curvature_metrics(
     """
     Xc = X[:hessian_batch_size].detach()
     Yc = Y[:hessian_batch_size].detach()
+
+    # Auto-detect LM (nanochat) vs classifier (ViT) from parameter names,
+    # mirroring get_VV_subspace_mask's architecture detection.
+    _is_lm = any(n.endswith(".attn.c_v.weight") for n, _ in model.named_parameters())
+    if _is_lm:
+        Yc = Yc.reshape(-1)  # (B, T) → (B*T,)
+
+    def _flat_logits(logits: torch.Tensor) -> torch.Tensor:
+        """Flatten LM output (B, T, V) → (B*T, V); no-op for classifiers (B, C)."""
+        return logits.reshape(-1, logits.size(-1)) if _is_lm else logits
 
     params_keys = [k for k, _ in model.named_parameters()]
     params_vals = [p for _, p in model.named_parameters()]
@@ -204,7 +131,7 @@ def get_curvature_metrics(
         else nullcontext()
     )
     with _sdp_ctx:
-        logits_h = model(Xc)
+        logits_h = _flat_logits(model(Xc))
     loss = F.cross_entropy(logits_h, Yc, label_smoothing=label_smoothing)
     del logits_h
 
@@ -347,10 +274,10 @@ def get_curvature_metrics(
     try:
         def _fwd_loss_tuple(*p_vals: torch.Tensor) -> torch.Tensor:
             p_dict = {k: v for k, v in zip(params_keys, p_vals)}
-            logits = functional_call(model, p_dict, (Xc,))
-            return F.cross_entropy(logits, Yc, reduction="none")  # (B,)
+            logits = _flat_logits(functional_call(model, p_dict, (Xc,)))
+            return F.cross_entropy(logits, Yc, reduction="none")
 
-        B = Xc.size(0)
+        B = Yc.size(0)
         v_f = torch.randn_like(flat_params)
         v_f = v_f / (v_f.norm() + 1e-9)
         flat_fv: torch.Tensor | None = None
@@ -395,7 +322,7 @@ def get_curvature_metrics(
                     p.data.add_(eps_cd * v_b[offset : offset + numel].view_as(p))
                     offset += numel
                 optimizer.zero_grad()
-                loss_bp = F.cross_entropy(model(Xc), Yc)
+                loss_bp = F.cross_entropy(_flat_logits(model(Xc)), Yc)
                 loss_bp.backward()
                 g_plus = torch.cat([p.grad.reshape(-1).clone() for p in model.parameters()])
                 offset = 0
@@ -404,7 +331,7 @@ def get_curvature_metrics(
                     p.data.add_(-2.0 * eps_cd * v_b[offset : offset + numel].view_as(p))
                     offset += numel
                 optimizer.zero_grad()
-                loss_bm = F.cross_entropy(model(Xc), Yc)
+                loss_bm = F.cross_entropy(_flat_logits(model(Xc)), Yc)
                 loss_bm.backward()
                 g_minus = torch.cat([p.grad.reshape(-1).clone() for p in model.parameters()])
                 offset = 0
@@ -445,7 +372,7 @@ def get_curvature_metrics(
                     handles.append(mod.register_forward_hook(_fwd_hook))
                     handles.append(mod.register_full_backward_hook(_bwd_hook))
             optimizer.zero_grad()
-            logits_kfac = model(Xc)
+            logits_kfac = _flat_logits(model(Xc))
             loss_kfac = F.cross_entropy(logits_kfac, Yc)
             loss_kfac.backward()
             optimizer.zero_grad()
@@ -485,7 +412,7 @@ def get_curvature_metrics(
         try:
             eps_fd = 1e-4
             optimizer.zero_grad()
-            loss_f0 = F.cross_entropy(model(Xc), Yc)
+            loss_f0 = F.cross_entropy(_flat_logits(model(Xc)), Yc)
             loss_f0.backward()
             g_base = torch.cat([p.grad.reshape(-1).clone() for p in model.parameters()])
             v_fd = torch.randn_like(flat_params)
@@ -498,7 +425,7 @@ def get_curvature_metrics(
                     p.data.add_(eps_fd * v_fd[offset : offset + numel].view_as(p))
                     offset += numel
                 optimizer.zero_grad()
-                loss_fp = F.cross_entropy(model(Xc), Yc)
+                loss_fp = F.cross_entropy(_flat_logits(model(Xc)), Yc)
                 loss_fp.backward()
                 g_pert = torch.cat([p.grad.reshape(-1).clone() for p in model.parameters()])
                 offset = 0
@@ -546,8 +473,8 @@ def get_attention_entropy(model: torch.nn.Module) -> list[float]:
     Entropy in nats:  H = -Σ p·ln(p)  over the key dimension.
 
     Architecture is auto-detected:
-      * **timm ViT** (ViT/, ViT5/, ViT_depth/): iterates ``model.blocks``.
-      * **nanochat GPT**: iterates ``model.transformer.h``.
+      * ViT: iterates ``model.blocks``.
+      * nanochat: iterates ``model.transformer.h``.
 
     Args:
         model: A hooked model whose attention blocks have already executed
@@ -574,3 +501,16 @@ def get_attention_entropy(model: torch.nn.Module) -> list[float]:
         else:
             layer_entropies.append(0.0)
     return layer_entropies
+
+
+# ==========================================================================
+# Checkpoint utilities
+# ==========================================================================
+
+
+def strip_compile_prefix(state_dict: dict) -> dict:
+    """Remove the ``_orig_mod.`` key prefix added by ``torch.compile``."""
+    return {
+        (k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v
+        for k, v in state_dict.items()
+    }

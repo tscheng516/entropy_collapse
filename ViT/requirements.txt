@@ -26,5 +26,5 @@ scipy==1.11.4
 matplotlib==3.8.2
 
 # Logging and data
-wandb==0.19.11
+wandb==0.21.3
 datasets==2.19.2
