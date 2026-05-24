@@ -123,6 +123,9 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     entropy_intv: int = 50
     # Compute per-layer attention entropy every N iterations.
+    att_sim: bool = False
+    # When True, do a final forward pass after training and save an
+    # attention heatmap (layer=1, head=1) via plot_results.
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention

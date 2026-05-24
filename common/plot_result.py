@@ -57,6 +57,7 @@ def plot_results(
     vs_H_prec: bool = False,
     layout: str = "22",
     fmt: str = "png",
+    att_sim: bool = False,
 ) -> plt.Figure:
     """
     Layout modes
@@ -358,6 +359,32 @@ def plot_results(
     if save_path:
         fig.savefig(save_path, format=fmt, dpi=150, bbox_inches="tight")
 
+    # ------------------------------------------------------------------
+    # Optional: attention heatmap figure (att_sim=True)
+    # Generated after the summary figure so it never blocks the main plot.
+    # ------------------------------------------------------------------
+    if att_sim:
+        heatmap_arr = history.get("att_heatmap")
+        if heatmap_arr is not None:
+            heatmap_arr = np.asarray(heatmap_arr, dtype=float)
+            if heatmap_arr.ndim == 2 and heatmap_arr.size > 0:
+                hfig, hax = plt.subplots(figsize=(5, 4))
+                him = hax.imshow(heatmap_arr, aspect="auto", cmap="viridis", vmin=0.0)
+                hfig.colorbar(him, ax=hax)
+                hax.set_title("Attention  layer=1  head=1  (final)", fontsize=13)
+                hax.set_xlabel("key position", fontsize=11)
+                hax.set_ylabel("query position", fontsize=11)
+                hfig.tight_layout()
+                if save_path:
+                    _base, _ext = os.path.splitext(save_path)
+                    heatmap_path = f"{_base}_heatmap.{fmt}"
+                else:
+                    heatmap_path = os.path.join(
+                        os.path.dirname(pkl_path), f"att_heatmap.{fmt}"
+                    )
+                hfig.savefig(heatmap_path, format=fmt, dpi=150, bbox_inches="tight")
+                plt.close(hfig)
+
     return fig
 
 
@@ -531,6 +558,10 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--att-sim", action="store_true",
+        help="Generate attention heatmap (layer=1, head=1) from history['att_heatmap'] if present.",
+    )
+    parser.add_argument(
         "--fmt", type=str, default="png",
         choices=["png", "pdf", "svg", "eps"],
         help="Output image format (default: png).",
@@ -567,6 +598,7 @@ def main() -> None:
             vs_H_prec=args.vs_H_prec,
             layout=args.layout,
             fmt=args.fmt,
+            att_sim=args.att_sim,
         )
         plt.close(fig)
         print(f"           → saved to {save_path}")

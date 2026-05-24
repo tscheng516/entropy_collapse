@@ -503,6 +503,99 @@ def get_attention_entropy(model: torch.nn.Module) -> list[float]:
     return layer_entropies
 
 
+def get_attention_similarity(model: torch.nn.Module) -> list[list[float]]:
+    """
+    For every transformer layer and every attention head, compute the mean
+    pairwise normalized Frobenius inner product (cosine similarity in matrix
+    space) between the full attention matrices of different samples in the batch.
+
+    With ``last_att`` of shape ``(B, heads, N, N)``, for head *h* at layer *l*::
+
+        A_i = last_att[i, h, :, :]       # N×N matrix for sample i
+        sim = mean_{i < j}  ⟨A_i, A_j⟩_F / (‖A_i‖_F · ‖A_j‖_F)
+
+    A value near **1** means every sample attends to the same positions (the
+    collapsed, one-hot pattern is identical across inputs); near **0** means
+    each sample has a distinct attention focus.
+
+    Architecture is auto-detected (ViT: ``model.blocks``;
+    nanochat: ``model.transformer.h``).
+
+    Args:
+        model: A hooked model whose attention blocks have already executed
+               a forward pass so that ``block.attn.last_att`` is populated.
+
+    Returns:
+        Nested list ``result[layer][head]`` — the mean pairwise similarity
+        (float) for that layer and head.  Layers where ``last_att`` is absent
+        or the batch has fewer than 2 samples yield a list of 0.0s.
+    """
+    if hasattr(model, "blocks"):
+        blocks = model.blocks
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        blocks = model.transformer.h
+    else:
+        return []
+
+    result: list[list[float]] = []
+    for block in blocks:
+        att = getattr(block.attn, "last_att", None)
+        if att is None or att.size(0) < 2:
+            result.append([])
+            continue
+        n_heads = att.size(1)
+        B_size = att.size(0)
+        # Compute upper-triangle indices once for this layer
+        idx = torch.triu_indices(B_size, B_size, offset=1, device=att.device)
+        head_sims: list[float] = []
+        for h in range(n_heads):
+            A = att[:, h, :, :].reshape(B_size, -1).float()       # (B, N*N)
+            norms = A.norm(dim=-1, keepdim=True).clamp(min=1e-9)  # (B, 1)
+            A_norm = A / norms                                      # (B, N*N)
+            gram = A_norm @ A_norm.t()                              # (B, B)
+            sim = gram[idx[0], idx[1]].mean().item()
+            head_sims.append(sim)
+        result.append(head_sims)
+    return result
+
+
+def get_attention_heatmap(
+    model: torch.nn.Module, head: int = 0, layer: int = 0
+) -> "np.ndarray | None":
+    """
+    Return the ``N×N`` attention matrix for the **first** sample in the batch at
+    the specified layer and head (both 0-indexed), as a float32 NumPy array.
+
+    Intended for producing a snapshot heatmap of how each query position attends
+    over the key positions at a particular training checkpoint.
+
+    Architecture is auto-detected (ViT: ``model.blocks``;
+    nanochat: ``model.transformer.h``).
+
+    Args:
+        model: A hooked model with populated ``block.attn.last_att``.
+        head:  Head index (0-indexed).  Default 0 (head=1 in 1-based notation).
+        layer: Layer index (0-indexed).  Default 0 (layer=1 in 1-based notation).
+
+    Returns:
+        NumPy array of shape ``(N, N)``, or ``None`` if the cache is unavailable
+        for the requested layer/head.
+    """
+    if hasattr(model, "blocks"):
+        blocks = model.blocks
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        blocks = model.transformer.h
+    else:
+        return None
+
+    if layer >= len(blocks):
+        return None
+    att = getattr(blocks[layer].attn, "last_att", None)
+    if att is None or head >= att.size(1):
+        return None
+    return att[0, head].float().detach().cpu().numpy()
+
+
 # ==========================================================================
 # Checkpoint utilities
 # ==========================================================================

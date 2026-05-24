@@ -358,6 +358,8 @@ if cfg.wandb_log:
 from common.helpers import (  # noqa: E402
     get_VV_subspace_mask,
     get_attention_entropy,
+    get_attention_similarity,
+    get_attention_heatmap,
     get_curvature_metrics,
     strip_compile_prefix,
 )
@@ -427,6 +429,7 @@ history: dict[str, list] = {
     "bfgs": [],
     "kfac": [],
     "entropy": [],
+    "similarity": [],
     "lr": [],
 }
 
@@ -513,6 +516,7 @@ for iter_num in range(iter_num, cfg.max_iters):
 
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
+    layer_sims: list[list[float]] = [[] for _ in range(n_layers)]
     _need_entropy = iter_num % cfg.entropy_intv == 0
 
     if _need_entropy:
@@ -531,6 +535,7 @@ for iter_num in range(iter_num, cfg.max_iters):
     if _need_entropy:
         with torch.no_grad():
             layer_entropies = get_attention_entropy(_raw_model)
+            layer_sims = get_attention_similarity(_raw_model)
         for blk in _raw_model.transformer.h:
             blk.attn._cache_attn = False
             blk.attn.last_att = None  # free attention cache immediately
@@ -542,6 +547,7 @@ for iter_num in range(iter_num, cfg.max_iters):
     history["loss"].append(loss_val)
     history["lr"].append(lr)
     history["entropy"].append(layer_entropies)
+    history["similarity"].append(layer_sims)
 
     # pre-fetch next batch
     X, Y = next(train_iter)
@@ -555,6 +561,12 @@ for iter_num in range(iter_num, cfg.max_iters):
                 f"iter {iter_num:5d} | loss {loss_val:.4f} "
                 f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
             )
+            if iter_num % cfg.entropy_intv == 0:
+                _sim_str = "  ".join(
+                    f"L{i}:[" + ",".join(f"{v:.3f}" for v in hs) + "]"
+                    for i, hs in enumerate(layer_sims)
+                )
+                print(f"  attn_sim(all_h): {_sim_str}")
             if iter_num % cfg.hessian_intv == 0:
                 _cmsg = (
                     f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
@@ -593,13 +605,32 @@ for iter_num in range(iter_num, cfg.max_iters):
                     f"entropy/layer_{i}": v
                     for i, v in enumerate(layer_entropies)
                 })
+                log_dict.update({
+                    f"attn_sim/layer_{i}_head_{j}": v
+                    for i, hs in enumerate(layer_sims)
+                    for j, v in enumerate(hs)
+                })
             wandb.log(log_dict, step=iter_num)
 
 # ---------------------------------------------------------------------------
 # 11.  Final checkpoint & history
 # ---------------------------------------------------------------------------
 _save_checkpoint("final_ckpt")
-save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank)
+
+# ---- Final attention heatmap snapshot (att_sim=True, rank-0 only) ----
+if cfg.att_sim and (not use_ddp or rank == 0):
+    _raw_model.eval()
+    for blk in _raw_model.transformer.h:
+        blk.attn._cache_attn = True
+    with torch.no_grad():
+        _ = _raw_model(X)
+    history["att_heatmap"] = get_attention_heatmap(_raw_model, head=0, layer=0)
+    for blk in _raw_model.transformer.h:
+        blk.attn._cache_attn = False
+        blk.attn.last_att = None
+    _raw_model.train()
+
+save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, att_sim=cfg.att_sim)
 
 # ---------------------------------------------------------------------------
 # 12.  DDP teardown
