@@ -607,3 +607,124 @@ def strip_compile_prefix(state_dict: dict) -> dict:
         (k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v
         for k, v in state_dict.items()
     }
+
+
+# ==========================================================================
+# Feature covariance stable rank
+# ==========================================================================
+
+
+@torch.no_grad()
+def get_feature_covariance_stable_rank(
+    model: torch.nn.Module,
+    X: torch.Tensor,
+    hessian_batch_size: int = 128,
+    max_iter: int = 10,
+) -> dict[str, list[float]]:
+    """
+    Compute the stable rank of the per-layer feature covariance (Gram) matrix K.
+
+    For a batch of ``hessian_batch_size`` samples, each yielding a feature
+    representation ``X_i^{(l)} ∈ R^{T×d}`` (T = sequence/patch length,
+    d = hidden dimension), the Gram matrix is::
+
+        K_{ij}^{(l)} = <X_i^{(l)}, X_j^{(l)}>_F = vec(X_i)^T vec(X_j)
+
+    giving a symmetric PSD matrix K ∈ R^{B×B}.  The stable rank is::
+
+        stable_rank(K) = ||K||_F^2 / ||K||_op^2
+
+    where ``||K||_op = lambda_max(K)`` is estimated via power iteration,
+    consistent with ``get_curvature_metrics``.
+
+    Measured twice per layer:
+
+    * ``post_attn`` — residual stream after the self-attention sublayer,
+                      captured as the input to the second layer-norm (norm2)
+                      in a pre-norm transformer.
+    * ``post_ffn``  — residual stream after the FFN sublayer, i.e. the
+                      block output.
+
+    Architecture is auto-detected:
+
+    * ViT:      ``model.blocks``        (timm, pre-norm, ``block.norm2``)
+    * nanochat: ``model.transformer.h`` (pre-norm, ``block.norm2``)
+
+    Args:
+        model:              Model (unwrapped from DDP).
+        X:                  Input batch (images for ViT, token IDs for GPT).
+        hessian_batch_size: Number of samples to use from X.
+        max_iter:           Power-iteration steps for lambda_max estimation.
+
+    Returns:
+        Dict with keys ``'post_attn'`` and ``'post_ffn'``, each a list of
+        stable ranks (float) of length equal to the number of transformer
+        blocks.  Layers where the feature cache is unavailable yield 0.0.
+    """
+    Xc = X[:hessian_batch_size].detach()
+
+    if hasattr(model, "blocks"):
+        blocks = model.blocks  # ViT
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        blocks = model.transformer.h  # nanochat
+    else:
+        return {"post_attn": [], "post_ffn": []}
+
+    n_layers = len(blocks)
+    feat_post_attn: list[torch.Tensor | None] = [None] * n_layers
+    feat_post_ffn:  list[torch.Tensor | None] = [None] * n_layers
+    handles: list = []
+
+    for l, blk in enumerate(blocks):
+        # Post-attn residual stream = input to norm2 (pre-norm architecture).
+        norm2 = getattr(blk, "norm2", None)
+        if norm2 is not None:
+            def _pre_hook(mod, args, _l=l):
+                feat_post_attn[_l] = args[0].detach().float()
+            handles.append(norm2.register_forward_pre_hook(_pre_hook))
+
+        # Post-FFN residual stream = block output.
+        def _post_hook(mod, inp, output, _l=l):
+            out = output[0] if isinstance(output, tuple) else output
+            feat_post_ffn[_l] = out.detach().float()
+        handles.append(blk.register_forward_hook(_post_hook))
+
+    _was_training = model.training
+    model.eval()
+    try:
+        model(Xc)
+    finally:
+        for h in handles:
+            h.remove()
+        if _was_training:
+            model.train()
+
+    def _stable_rank(feat: torch.Tensor | None) -> float:
+        if feat is None:
+            return 0.0
+        B = feat.size(0)
+        if B < 2:
+            return 0.0
+        # Flatten (B, T, d) or (B, N, d) → (B, T*d)
+        x_flat = feat.reshape(B, -1)
+        # Gram matrix K (B, B), symmetric PSD
+        K = x_flat @ x_flat.t()
+        # Frobenius norm squared
+        frob_sq = (K * K).sum().item()
+        if frob_sq < 1e-30:
+            return 0.0
+        # Operator norm = lambda_max(K) via power iteration
+        v = torch.randn(B, device=K.device, dtype=K.dtype)
+        v = v / (v.norm() + 1e-9)
+        for _ in range(max_iter):
+            w = K @ v
+            v = w / (w.norm() + 1e-9)
+        lambda_max = (v @ (K @ v)).item()
+        op_sq = lambda_max ** 2
+        if op_sq < 1e-30:
+            return 0.0
+        return frob_sq / op_sq
+
+    post_attn_ranks = [_stable_rank(feat_post_attn[l]) for l in range(n_layers)]
+    post_ffn_ranks  = [_stable_rank(feat_post_ffn[l])  for l in range(n_layers)]
+    return {"post_attn": post_attn_ranks, "post_ffn": post_ffn_ranks}

@@ -361,6 +361,7 @@ from common.helpers import (  # noqa: E402
     get_attention_similarity,
     get_attention_heatmap,
     get_curvature_metrics,
+    get_feature_covariance_stable_rank,
     strip_compile_prefix,
 )
 
@@ -430,6 +431,8 @@ history: dict[str, list] = {
     "kfac": [],
     "entropy": [],
     "similarity": [],
+    "cov_stable_rank_post_attn": [],
+    "cov_stable_rank_post_ffn": [],
     "lr": [],
 }
 
@@ -517,6 +520,8 @@ for iter_num in range(iter_num, cfg.max_iters):
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
     layer_sims: list[list[float]] = [[] for _ in range(n_layers)]
+    cov_stable_rank_post_attn: list[float] = [0.0] * n_layers
+    cov_stable_rank_post_ffn: list[float] = [0.0] * n_layers
     _need_entropy = iter_num % cfg.entropy_intv == 0
 
     if _need_entropy:
@@ -543,11 +548,24 @@ for iter_num in range(iter_num, cfg.max_iters):
     loss.backward()
     optimizer.step()
 
+    # ---- Feature covariance stable rank (att_sim only) ----
+    if _need_entropy and cfg.att_sim:
+        _cov = get_feature_covariance_stable_rank(
+            _raw_model,
+            X,
+            hessian_batch_size=cfg.hessian_batch_size,
+            max_iter=cfg.hessian_max_iter,
+        )
+        cov_stable_rank_post_attn = _cov["post_attn"]
+        cov_stable_rank_post_ffn  = _cov["post_ffn"]
+
     loss_val = loss.item()
     history["loss"].append(loss_val)
     history["lr"].append(lr)
     history["entropy"].append(layer_entropies)
     history["similarity"].append(layer_sims)
+    history["cov_stable_rank_post_attn"].append(cov_stable_rank_post_attn)
+    history["cov_stable_rank_post_ffn"].append(cov_stable_rank_post_ffn)
 
     # pre-fetch next batch
     X, Y = next(train_iter)
@@ -567,6 +585,15 @@ for iter_num in range(iter_num, cfg.max_iters):
                     for i, hs in enumerate(layer_sims)
                 )
                 print(f"  attn_sim(all_h): {_sim_str}")
+                if cfg.att_sim:
+                    _cov_str_attn = "  ".join(
+                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_attn)
+                    )
+                    _cov_str_ffn = "  ".join(
+                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_ffn)
+                    )
+                    print(f"  cov_sr(post_attn): {_cov_str_attn}")
+                    print(f"  cov_sr(post_ffn):  {_cov_str_ffn}")
             if iter_num % cfg.hessian_intv == 0:
                 _cmsg = (
                     f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
@@ -610,6 +637,15 @@ for iter_num in range(iter_num, cfg.max_iters):
                     for i, hs in enumerate(layer_sims)
                     for j, v in enumerate(hs)
                 })
+                if cfg.att_sim:
+                    log_dict.update({
+                        f"cov_sr/post_attn_layer_{i}": v
+                        for i, v in enumerate(cov_stable_rank_post_attn)
+                    })
+                    log_dict.update({
+                        f"cov_sr/post_ffn_layer_{i}": v
+                        for i, v in enumerate(cov_stable_rank_post_ffn)
+                    })
             wandb.log(log_dict, step=iter_num)
 
 # ---------------------------------------------------------------------------
