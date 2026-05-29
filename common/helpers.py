@@ -596,6 +596,41 @@ def get_attention_heatmap(
     return att[0, head].float().detach().cpu().numpy()
 
 
+def get_attention_heatmap_all(
+    model: torch.nn.Module,
+) -> "np.ndarray | None":
+    """
+    Return attention maps for **all layers and all heads** as a single NumPy
+    array of shape ``(n_layers, n_heads, N, N)``, float32.
+
+    Requires that ``block.attn._cache_attn = True`` was set and a forward pass
+    was run before calling this function.
+
+    Args:
+        model: A hooked model with populated ``block.attn.last_att`` tensors.
+
+    Returns:
+        NumPy array of shape ``(n_layers, n_heads, N, N)``, or ``None`` if the
+        cache is unavailable for any layer.
+    """
+    if hasattr(model, "blocks"):
+        blocks = model.blocks
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        blocks = model.transformer.h
+    else:
+        return None
+
+    layers = []
+    for blk in blocks:
+        att = getattr(blk.attn, "last_att", None)
+        if att is None:
+            return None
+        # att: (batch, n_heads, N, N) — keep first sample
+        layers.append(att[0].float().detach().cpu().numpy())
+
+    return np.stack(layers, axis=0) if layers else None  # (n_layers, n_heads, N, N)
+
+
 # ==========================================================================
 # Checkpoint utilities
 # ==========================================================================

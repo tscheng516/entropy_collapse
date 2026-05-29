@@ -359,6 +359,7 @@ from common.helpers import (
     get_attention_entropy,
     get_attention_similarity,
     get_attention_heatmap,
+    get_attention_heatmap_all,
     get_feature_covariance_stable_rank,
     strip_compile_prefix,
 )
@@ -437,6 +438,8 @@ history: dict[str, list] = {
     "cov_stable_rank_post_attn": [],
     "cov_stable_rank_post_ffn": [],
     "lr": [],
+    "att_heatmaps": [],
+    "att_heatmap_iters": [],
 }
 
 if _is_master:
@@ -486,6 +489,23 @@ for iter_num in range(iter_num, cfg.max_iters):
                 best_val_loss = val_loss
                 # _save_checkpoint("best_ckpt")
             # _save_checkpoint("ckpt")
+
+        # ---- Attention heatmap snapshot (all layers & heads) ----
+        if cfg.att_sim and (not use_ddp or rank == 0):
+            _raw_model.eval()
+            for blk in _raw_model.blocks:
+                blk.attn._cache_attn = True
+            with torch.no_grad():
+                with ctx:
+                    _ = _raw_model(X)
+            _snapshot = get_attention_heatmap_all(_raw_model)
+            if _snapshot is not None:
+                history["att_heatmaps"].append(_snapshot)
+                history["att_heatmap_iters"].append(iter_num)
+            for blk in _raw_model.blocks:
+                blk.attn._cache_attn = False
+                blk.attn.last_att = None
+            _raw_model.train()
 
     if cfg.checkpoint_interval > 0 and iter_num % cfg.checkpoint_interval == 0 and iter_num > 0:
         _save_checkpoint(f"ckpt_iter{iter_num:06d}")
@@ -680,20 +700,6 @@ for iter_num in range(iter_num, cfg.max_iters):
 # 10.  Final checkpoint & history
 # ---------------------------------------------------------------------------
 _save_checkpoint("final_ckpt")
-
-# ---- Final attention heatmap snapshot (att_sim=True, rank-0 only) ----
-if cfg.att_sim and (not use_ddp or rank == 0):
-    _raw_model.eval()
-    for blk in _raw_model.blocks:
-        blk.attn._cache_attn = True
-    with torch.no_grad():
-        with ctx:
-            _ = _raw_model(X)
-    history["att_heatmap"] = get_attention_heatmap(_raw_model, head=0, layer=0)
-    for blk in _raw_model.blocks:
-        blk.attn._cache_attn = False
-        blk.attn.last_att = None
-    _raw_model.train()
 
 save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, att_sim=cfg.att_sim)
 
