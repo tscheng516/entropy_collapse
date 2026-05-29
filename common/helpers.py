@@ -742,6 +742,9 @@ def get_feature_covariance_stable_rank(
             return 0.0
         # Flatten (B, T, d) or (B, N, d) → (B, T*d)
         x_flat = feat.reshape(B, -1)
+        # Centre features so the mean direction (largest eigenvalue of the
+        # uncentred Gram) is removed before computing stable rank.
+        x_flat = x_flat - x_flat.mean(dim=0, keepdim=True)
         # Gram matrix K (B, B), symmetric PSD
         K = x_flat @ x_flat.t()
         # Frobenius norm squared
