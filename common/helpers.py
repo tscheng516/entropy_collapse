@@ -631,9 +631,59 @@ def get_attention_heatmap_all(
     return np.stack(layers, axis=0) if layers else None  # (n_layers, n_heads, N, N)
 
 
-# ==========================================================================
-# Checkpoint utilities
-# ==========================================================================
+@torch.no_grad()
+def get_attention_gram_head0(
+    model: torch.nn.Module,
+    head: int = 0,
+) -> "list[np.ndarray] | None":
+    """
+    Compute the **centered Gram matrix** of the attention-weight maps for a
+    single head across the batch, for every layer.
+
+    Reads ``block.attn.last_att`` which must already be populated (i.e.
+    ``_cache_attn=True`` was set and a forward pass was run before calling).
+
+    For each layer the steps are:
+
+    .. code-block:: text
+
+        A_i = last_att[i, head, :, :].flatten()   # (N²,) per sample
+        A   = stack(A_i) − mean(A_i, dim=0)        # centre across batch
+        K   = A @ Aᵀ                               # (B, B) centred Gram
+
+    Architecture is auto-detected (ViT: ``model.blocks``;
+    nanochat: ``model.transformer.h``).
+
+    Args:
+        model: Hooked model with populated ``last_att`` caches.
+        head:  Attention-head index to use (0-based, default 0).
+
+    Returns:
+        List of float32 NumPy arrays of shape ``(B, B)``, one per layer,
+        or ``None`` if the cache is unavailable for any layer.
+    """
+    if hasattr(model, "blocks"):
+        blocks = model.blocks
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        blocks = model.transformer.h
+    else:
+        return None
+
+    grams: list[np.ndarray] = []
+    for blk in blocks:
+        att = getattr(blk.attn, "last_att", None)
+        if att is None or head >= att.size(1):
+            return None
+        # att: (B, n_heads, N, N) → flatten head dim → (B, N²)
+        B = att.size(0)
+        x = att[:, head, :, :].reshape(B, -1).float()
+        x = x - x.mean(dim=0, keepdim=True)          # centre across batch
+        K = (x @ x.t()).detach().cpu().numpy()        # (B, B)
+        grams.append(K)
+
+    return grams if grams else None
+
+
 
 
 def strip_compile_prefix(state_dict: dict) -> dict:

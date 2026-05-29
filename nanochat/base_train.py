@@ -361,6 +361,7 @@ from common.helpers import (  # noqa: E402
     get_attention_similarity,
     get_attention_heatmap,
     get_attention_heatmap_all,
+    get_attention_gram_head0,
     get_curvature_metrics,
     get_feature_covariance_stable_rank,
     strip_compile_prefix,
@@ -437,6 +438,8 @@ history: dict[str, list] = {
     "lr": [],
     "att_heatmaps": [],
     "att_heatmap_iters": [],
+    "gram_hessian": [],
+    "gram_hessian_iters": [],
 }
 
 if _is_master:
@@ -536,6 +539,24 @@ for iter_num in range(iter_num, cfg.max_iters):
 
     for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd", "diag_h", "fisher", "bfgs", "kfac"):
         history[k].append(curvature[k])
+
+    # ---- Attention Gram matrix snapshot (head=0, all layers, hessian batch) ----
+    if iter_num % cfg.hessian_intv == 0 and cfg.att_sim and (not use_ddp or rank == 0):
+        _raw_model.eval()
+        _Xc = X[:cfg.hessian_batch_size]
+        for blk in _raw_model.transformer.h:
+            blk.attn._cache_attn = True
+        with torch.no_grad():
+            with ctx:
+                _ = _raw_model(_Xc)
+        _grams = get_attention_gram_head0(_raw_model, head=0)
+        if _grams is not None:
+            history["gram_hessian"].append(_grams)
+            history["gram_hessian_iters"].append(iter_num)
+        for blk in _raw_model.transformer.h:
+            blk.attn._cache_attn = False
+            blk.attn.last_att = None
+        _raw_model.train()
 
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
