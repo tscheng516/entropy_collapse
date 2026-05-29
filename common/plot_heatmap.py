@@ -34,7 +34,6 @@ time-series key is absent.
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import pickle
 import sys
@@ -57,25 +56,28 @@ import matplotlib.pyplot as plt
 
 def plot_heatmap(
     pkl_path: str,
-    save_path: str | None = None,
+    out_dir: str | None = None,
     freq: int = 6,
     layer: int = 0,
     head: int = 0,
     fmt: str = "png",
-) -> plt.Figure:
+) -> list[plt.Figure]:
     """
-    Generate *freq* attention heatmaps evenly sampled across training snapshots.
+    Generate *freq* separate attention heatmap figures evenly sampled across
+    training snapshots, one figure per snapshot.
 
     Args:
-        pkl_path:   Path to the ``history.pkl`` file.
-        save_path:  If provided, save the figure to this path.
-        freq:       Number of heatmaps to generate (evenly spaced across snapshots).
-        layer:      Layer index to visualise.
-        head:       Attention-head index to visualise.
-        fmt:        Output image format.
+        pkl_path:  Path to the ``history.pkl`` file.
+        out_dir:   Directory to save the figures in.  Defaults to the directory
+                   containing *pkl_path*.  Each figure is saved as
+                   ``att_heatmap_L{layer}H{head}_iter{step:07d}.{fmt}``.
+        freq:      Number of snapshots (and therefore figures) to generate.
+        layer:     Layer index to visualise (0-based).
+        head:      Attention-head index to visualise (0-based).
+        fmt:       Output image format.
 
     Returns:
-        The matplotlib ``Figure``.
+        List of *freq* matplotlib ``Figure`` objects (one per snapshot).
     """
     with open(pkl_path, "rb") as fh:
         history = pickle.load(fh)
@@ -154,50 +156,32 @@ def plot_heatmap(
         frames.append((int(iters[si]), m2d))
 
     # ------------------------------------------------------------------
-    # Build figure
+    # Build one figure per snapshot
     # ------------------------------------------------------------------
-    n = len(frames)
-    ncols = min(n, 4)
-    nrows = math.ceil(n / ncols)
-
-    fig, axes = plt.subplots(
-        nrows, ncols,
-        figsize=(4 * ncols, 3.5 * nrows),
-        squeeze=False,
-    )
-
-    # Shared colour scale across all panels
-    vmin = min(f[1].min() for f in frames)
-    vmax = max(f[1].max() for f in frames)
-
-    for idx, (step, m2d) in enumerate(frames):
-        r, c = divmod(idx, ncols)
-        ax = axes[r][c]
-        im = ax.imshow(m2d, aspect="auto", cmap="viridis", vmin=vmin, vmax=vmax)
-        ax.set_title(f"iter {step}", fontsize=9)
-        ax.set_xlabel("key pos", fontsize=8)
-        ax.set_ylabel("query pos", fontsize=8)
-        ax.tick_params(labelsize=7)
-
-    # Hide any unused axes
-    for idx in range(n, nrows * ncols):
-        r, c = divmod(idx, ncols)
-        axes[r][c].set_visible(False)
-
-    # Shared colourbar on the right
-    fig.colorbar(im, ax=axes[:, -1].tolist(), shrink=0.8, pad=0.02)
-
     run_name = os.path.basename(os.path.dirname(pkl_path))
-    fig.suptitle(
-        f"Attention heatmaps  —  {run_name}  |  layer={layer}  head={head}",
-        fontsize=11,
-    )
-    fig.tight_layout(rect=[0, 0, 0.93, 0.96])
+    save_dir = out_dir if out_dir is not None else os.path.dirname(pkl_path)
 
-    if save_path:
-        fig.savefig(save_path, format=fmt, dpi=150, bbox_inches="tight")
+    figures: list[plt.Figure] = []
+    for step, m2d in frames:
+        fig, ax = plt.subplots(figsize=(5, 4))
+        im = ax.imshow(m2d, aspect="auto", cmap="viridis")
+        fig.colorbar(im, ax=ax)
+        ax.set_title(
+            f"{run_name}  |  layer={layer}  head={head}  |  iter {step}",
+            fontsize=10,
+        )
+        ax.set_xlabel("key pos", fontsize=9)
+        ax.set_ylabel("query pos", fontsize=9)
+        fig.tight_layout()
 
-    return fig
+        fname = f"att_heatmap_L{layer}H{head}_iter{step:07d}.{fmt}"
+        fig.savefig(
+            os.path.join(save_dir, fname),
+            format=fmt, dpi=150, bbox_inches="tight",
+        )
+        figures.append(fig)
+
+    return figures
 
 
 # ======================================================================
@@ -253,9 +237,8 @@ def main() -> None:
         "-o", "--out",
         type=str, default=None,
         help=(
-            "Output file path when processing a single pkl, or output directory "
-            "when processing multiple pkls. Defaults to saving att_heatmap_grid.png "
-            "next to each history.pkl."
+            "Output directory for heatmap images. "
+            "Defaults to the directory containing each history.pkl."
         ),
     )
     parser.add_argument(
@@ -282,31 +265,26 @@ def main() -> None:
         print(f"[plot_heatmap] no history.pkl found under '{args.path}'")
         return
 
-    single = len(pkl_paths) == 1
-
     for i, pkl in enumerate(pkl_paths, 1):
         print(f"[plot_heatmap] [{i}/{len(pkl_paths)}] {pkl}")
 
-        _suffix = f"att_heatmap_grid_L{args.layer}H{args.head}.{args.fmt}"
-        if single and args.out:
-            save_path = args.out
-        elif args.out:
-            os.makedirs(args.out, exist_ok=True)
-            run_id = os.path.basename(os.path.dirname(pkl))
-            save_path = os.path.join(args.out, f"{run_id}_{_suffix}")
+        if args.out:
+            out_dir = args.out
+            os.makedirs(out_dir, exist_ok=True)
         else:
-            save_path = os.path.join(os.path.dirname(pkl), _suffix)
+            out_dir = os.path.dirname(pkl)
 
-        fig = plot_heatmap(
+        figs = plot_heatmap(
             pkl_path=pkl,
-            save_path=save_path,
+            out_dir=out_dir,
             freq=args.freq,
             layer=args.layer,
             head=args.head,
             fmt=args.fmt,
         )
-        plt.close(fig)
-        print(f"           → saved to {save_path}")
+        for fig in figs:
+            plt.close(fig)
+        print(f"           → {len(figs)} heatmap(s) saved to {out_dir}/")
 
 
 if __name__ == "__main__":
