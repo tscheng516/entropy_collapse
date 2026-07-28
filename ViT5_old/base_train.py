@@ -1,12 +1,11 @@
 """
-base_train.py — ViT5 (ViT-5) entropy-collapse training script.
+base_train.py — ViT-5 entropy-collapse training script.
 
 Default config: ViT-5-Base on CIFAR-100 (see TrainConfig in configs/train_config.py).
 Select a different preset via ``config=<name>``; available presets:
-  cifar100_small | cifar100_base | cifar100_large |
-  imagenet1k_small | imagenet1k_base | imagenet1k_large
+  cifar100_base | imagenet1k_base
 
-Logged every ``log_interval``:
+Logged every iteration:
   * Train loss / accuracy
   * Learning rate
 
@@ -14,19 +13,19 @@ Logged every ``eval_interval``:
   * Val loss / accuracy
 
 Logged every ``hessian_intv``:
-  * Curvature proxies — lambda_max of H, Prec_H, H_VV, GN, Diag_H, Fisher
-    (+ KFAC, BFGS and FD when compute_fd=True)
+  * Curvature proxies — λ_max of H, Prec_H, H_VV, GN, Diag_H, Fisher, KFAC
+    (+ BFGS / FD when compute_fd=True)
 
 Logged every ``entropy_intv``:
   * Per-layer attention entropy
 
-Architecture: ViT-5 (fixed family; size selected via ``model_name``)
-  RMSNorm, QK-norm, 2-D RoPE, 4 register tokens, layer-scale, no QKV bias.
-  Paper: https://arxiv.org/abs/2602.08071
+Architecture: ViT-5-Base (fixed)
+  embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
+  RMSNorm, QK-norm, 2-D RoPE, 4 register tokens, layer-scale.
 
 Usage
 -----
-Default — pilot run (ViT-5-Base, CIFAR-100)::
+Default (ViT-5-Base, CIFAR-100)::
 
     python base_train.py
 
@@ -36,11 +35,12 @@ Named preset::
 
 Override individual fields::
 
-    python base_train.py config=imagenet1k_base learning_rate=3e-4 max_iters=15000
+    python base_train.py learning_rate=1e-3 max_iters=10000 hessian_intv=100
 
 Multi-GPU via torchrun::
 
-    torchrun --nproc_per_node=4 base_train.py config=imagenet1k_base
+    torchrun --nproc_per_node=4 base_train.py config=imagenet1k_base \\
+        data_dir=/data/imagenet
 
 All config fields can be overridden as ``key=value`` arguments.
 """
@@ -80,19 +80,20 @@ from common.train_utils import resolve_config, setup_ddp_and_run_dir, init_wandb
 cfg = resolve_config(TrainConfig, CONFIGS, _is_master)
 
 
-def _dataset_defaults(dataset_name: str) -> tuple[int, int] | None:
+def _dataset_num_classes(dataset_name: str) -> int | None:
+    """Return the canonical num_classes for known datasets, else None."""
     ds = dataset_name.lower()
+    if ds == "cifar10":
+        return 10
     if ds == "cifar100":
-        return 100, 32
-    if ds == "imagenet1k":
-        return 1000, 192
+        return 100
+    if ds in ("imagenet", "imagenet1k", "imagenet_hf", "imagenet1k_hf", "hf_imagenet"):
+        return 1000
     return None
 
 
-dataset_defaults = _dataset_defaults(cfg.dataset)
-expected_classes: int | None = None
-if dataset_defaults is not None:
-    expected_classes, expected_img_size = dataset_defaults
+expected_classes: int | None = _dataset_num_classes(cfg.dataset)
+if expected_classes is not None:
     if cfg.num_classes != expected_classes:
         if _is_master:
             print(
@@ -100,16 +101,15 @@ if dataset_defaults is not None:
                 f"{cfg.num_classes} -> {expected_classes}"
             )
         cfg.num_classes = expected_classes
-    if cfg.img_size != expected_img_size:
-        if _is_master:
-            print(
-                f"[config] dataset='{cfg.dataset}' => overriding img_size "
-                f"{cfg.img_size} -> {expected_img_size}"
-            )
-        cfg.img_size = expected_img_size
-elif cfg.num_classes is None or cfg.img_size is None:
+elif cfg.num_classes is None:
     raise ValueError(
-        f"Unknown dataset '{cfg.dataset}'. Please set num_classes and img_size explicitly."
+        f"Unknown dataset '{cfg.dataset}'. Please set num_classes explicitly."
+    )
+
+if cfg.img_size is None:
+    raise ValueError(
+        f"img_size is None for dataset='{cfg.dataset}'. "
+        "Please set img_size explicitly or use a named preset config."
     )
 
 # ---------------------------------------------------------------------------
@@ -126,14 +126,10 @@ dtype_map = {
 }
 _FP8_ALIASES = {"float8", "float8_e4m3fn", "float8_e5m2"}
 if cfg.dtype in _FP8_ALIASES:
-    # FP8 via torch.amp.autocast is not yet natively supported.
-    # Use NVIDIA TransformerEngine for true FP8 training on H100/H200.
-    # Falling back to bfloat16 for AMP.
     if _is_master:
         print(
             f"[warn] dtype='{cfg.dtype}' — FP8 autocast is not natively supported "
-            "by torch.amp. Install TransformerEngine for true FP8 training. "
-            "Falling back to bfloat16."
+            "by torch.amp. Falling back to bfloat16."
         )
     ptdtype = torch.bfloat16
 else:
@@ -170,10 +166,9 @@ if _is_master:
     )
 
 # ---------------------------------------------------------------------------
-# 4.  Model
+# 4.  Model — ViT-5-Base (fixed architecture)
 # ---------------------------------------------------------------------------
 from src.model import build_hooked_vit5, set_attention_temperature
-from common.helpers import strip_compile_prefix
 
 iter_num = 0
 best_val_loss = float("inf")
@@ -181,21 +176,15 @@ best_val_loss = float("inf")
 
 if cfg.init_from == "scratch":
     if _is_master:
-        print(f"[model] building {cfg.model_name} from scratch …")
+        print("[model] building vit5_base from scratch …")
     model = build_hooked_vit5(
-        model_name=cfg.model_name,
         num_classes=cfg.num_classes,
         img_size=cfg.img_size,
         patch_size=cfg.patch_size,
-        num_registers=cfg.num_registers,
-        qk_norm=cfg.qk_norm,
-        reg_theta=cfg.reg_theta,
         drop_path_rate=cfg.drop_path_rate,
+        num_registers=cfg.num_registers,
         init_std=cfg.init_std,
         use_scaled_init=cfg.use_scaled_init,
-        depth=cfg.depth,
-        num_heads=cfg.num_heads,
-        embed_dim=cfg.embed_dim,
         device=device,
     )
 
@@ -211,19 +200,13 @@ elif cfg.init_from == "resume":
             "Use a matching dataset/checkpoint pair or train from scratch."
         )
     model = build_hooked_vit5(
-        model_name=checkpoint["model_name"],
         num_classes=checkpoint["num_classes"],
         img_size=cfg.img_size,
         patch_size=checkpoint.get("patch_size", cfg.patch_size),
+        drop_path_rate=checkpoint.get("drop_path_rate", cfg.drop_path_rate),
         num_registers=checkpoint.get("num_registers", cfg.num_registers),
-        qk_norm=checkpoint.get("qk_norm", cfg.qk_norm),
-        reg_theta=checkpoint.get("reg_theta", cfg.reg_theta),
-        drop_path_rate=cfg.drop_path_rate,
         init_std=cfg.init_std,
         use_scaled_init=False,
-        depth=checkpoint.get("depth"),
-        num_heads=checkpoint.get("num_heads"),
-        embed_dim=checkpoint.get("embed_dim"),
         device=device,
     )
     state_dict = strip_compile_prefix(checkpoint["model"])
@@ -243,19 +226,13 @@ else:
             "Use a matching dataset/checkpoint pair or start from scratch."
         )
     model = build_hooked_vit5(
-        model_name=checkpoint.get("model_name", cfg.model_name),
-        num_classes=checkpoint.get("num_classes", cfg.num_classes),
+        num_classes=ckpt_num_classes,
         img_size=cfg.img_size,
         patch_size=checkpoint.get("patch_size", cfg.patch_size),
+        drop_path_rate=checkpoint.get("drop_path_rate", cfg.drop_path_rate),
         num_registers=checkpoint.get("num_registers", cfg.num_registers),
-        qk_norm=checkpoint.get("qk_norm", cfg.qk_norm),
-        reg_theta=checkpoint.get("reg_theta", cfg.reg_theta),
-        drop_path_rate=cfg.drop_path_rate,
         init_std=cfg.init_std,
         use_scaled_init=False,
-        depth=checkpoint.get("depth"),
-        num_heads=checkpoint.get("num_heads"),
-        embed_dim=checkpoint.get("embed_dim"),
         device=device,
     )
     state_dict = strip_compile_prefix(checkpoint["model"])
@@ -263,7 +240,7 @@ else:
 
 n_params = sum(p.numel() for p in model.parameters()) / 1e6
 if _is_master:
-    print(f"[model] {cfg.model_name}  {n_params:.2f}M parameters")
+    print(f"[model] vit5_base  {n_params:.2f}M parameters")
 
 if cfg.compile:
     if _is_master:
@@ -338,26 +315,22 @@ if cfg.wandb_log:
 # ---------------------------------------------------------------------------
 # 8.  Helpers: curvature (spectral-norm) metrics & attention entropy
 #
-#   get_curvature_metrics  returns lambda_max estimates for nine curvature proxies:
-#     hessian   — lambda_max(H)               exact Hessian, power iteration
-#     prec_h    — lambda_max(D^-1/2 H D^-1/2) Adam-preconditioned Hessian
-#     hessian_vv— lambda_max(H_VV)            H restricted to value-proj subspace
-#     gn        — lambda_max(H_GN)            Gauss-Newton (J^T H_L J)
-#     bfgs      — lambda_max(H)               central-difference FD (O(eps^2))
-#     fd        — lambda_max(H)               forward-difference FD (O(eps))
-#     diag_h    — max(diag(H))                Bekas-Kokiopoulou-Saad estimator
-#     fisher    — lambda_max(F)               empirical Fisher
-#     kfac      — max lambda_max(A)*lambda_max(G)  K-FAC Kronecker proxy
+#   get_curvature_metrics  returns λ_max estimates for nine curvature proxies:
+#     hessian   — λ_max(H)               exact Hessian, power iteration
+#     prec_h    — λ_max(D^{-½} H D^{-½}) Adam-preconditioned Hessian
+#     hessian_vv— λ_max(H_VV)            H restricted to value-proj subspace
+#     gn        — λ_max(H_GN)            Gauss-Newton (J^T H_L J)
+#     bfgs      — λ_max(H)               central-difference FD (O(ε²))
+#     fd        — λ_max(H)               forward-difference FD (O(ε))
+#     diag_h    — max(diag(H))           Bekas–Kokiopoulou–Saad estimator
+#     fisher    — λ_max(F)               empirical Fisher
+#     kfac      — max λ_max(A)·λ_max(G)  K-FAC Kronecker proxy
 # ---------------------------------------------------------------------------
 from common.helpers import (
     get_VV_subspace_mask,
     get_curvature_metrics,
     get_attention_entropy,
-    get_attention_similarity,
-    get_attention_heatmap,
-    get_attention_heatmap_all,
-    get_attention_gram_head0,
-    get_feature_covariance_stable_rank,
+    strip_compile_prefix,
 )
 
 # Unwrap DDP to get the underlying module for mask / entropy helpers
@@ -396,15 +369,14 @@ def _save_checkpoint(suffix: str = "ckpt") -> None:
             "optimizer": optimizer.state_dict(),
             "iter_num": iter_num,
             "best_val_loss": best_val_loss,
-            "model_name": cfg.model_name,
+            # ViT-5-Base architecture identifiers
+            "model_arch": "vit5_base",
             "num_classes": cfg.num_classes,
-            "qk_norm": cfg.qk_norm,
-            "num_registers": cfg.num_registers,
-            "reg_theta": cfg.reg_theta,
-            "depth": cfg.depth,
-            "num_heads": cfg.num_heads,
-            "embed_dim": cfg.embed_dim,
+            "img_size": cfg.img_size,
             "patch_size": cfg.patch_size,
+            "drop_path_rate": cfg.drop_path_rate,
+            "num_registers": cfg.num_registers,
+            "qk_norm": cfg.qk_norm,
             "config": vars(cfg),
         }
         path = os.path.join(run_out_dir, f"{suffix}.pt")
@@ -432,14 +404,7 @@ history: dict[str, list] = {
     "bfgs": [],
     "kfac": [],
     "entropy": [],
-    "similarity": [],
-    "cov_stable_rank_post_attn": [],
-    "cov_stable_rank_post_ffn": [],
     "lr": [],
-    "att_heatmaps": [],
-    "att_heatmap_iters": [],
-    "gram_hessian": [],
-    "gram_hessian_iters": [],
 }
 
 if _is_master:
@@ -487,31 +452,14 @@ for iter_num in range(iter_num, cfg.max_iters):
         if (cfg.save_checkpoint or val_loss < best_val_loss) and iter_num > 0:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                _save_checkpoint("best_ckpt")
-            _save_checkpoint("ckpt")
-
-        # ---- Attention heatmap snapshot (all layers & heads) ----
-        if cfg.att_sim and (not use_ddp or rank == 0):
-            _raw_model.eval()
-            for blk in _raw_model.blocks:
-                blk.attn._cache_attn = True
-            with torch.no_grad():
-                with ctx:
-                    _ = _raw_model(X)
-            _snapshot = get_attention_heatmap_all(_raw_model)
-            if _snapshot is not None:
-                history["att_heatmaps"].append(_snapshot)
-                history["att_heatmap_iters"].append(iter_num)
-            for blk in _raw_model.blocks:
-                blk.attn._cache_attn = False
-                blk.attn.last_att = None
-            _raw_model.train()
+                # _save_checkpoint("best_ckpt")
+            # _save_checkpoint("ckpt")
 
     if cfg.checkpoint_interval > 0 and iter_num % cfg.checkpoint_interval == 0 and iter_num > 0:
         _save_checkpoint(f"ckpt_iter{iter_num:06d}")
 
     # ---- Curvature metrics (spectral norm) ----
-    # All nine proxies are lambda_max (or max-diagonal) estimates; reset to 0 on
+    # All nine proxies are λ_max (or max-diagonal) estimates; reset to 0 on
     # non-measurement iterations so history entries have consistent length.
     curvature: dict[str, float] = {
         "hessian": 0.0,
@@ -537,6 +485,7 @@ for iter_num in range(iter_num, cfg.max_iters):
                 max_iter=cfg.hessian_max_iter,
                 compute_fd=cfg.compute_fd,
                 hessian_batch_size=cfg.hessian_batch_size,
+                use_grad_ckpt=cfg.use_grad_ckpt,
                 label_smoothing=cfg.label_smoothing,
             )
         except Exception as exc:
@@ -548,32 +497,11 @@ for iter_num in range(iter_num, cfg.max_iters):
     for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd", "diag_h", "fisher", "bfgs", "kfac"):
         history[k].append(curvature[k])
 
-    # ---- Attention Gram matrix snapshot (head=0, all layers, hessian batch) ----
-    if iter_num % cfg.hessian_intv == 0 and cfg.att_sim and (not use_ddp or rank == 0):
-        _raw_model.eval()
-        _Xc = X[:cfg.hessian_batch_size]
-        for blk in _raw_model.blocks:
-            blk.attn._cache_attn = True
-        with torch.no_grad():
-            with ctx:
-                _ = _raw_model(_Xc)
-        _grams = get_attention_gram_head0(_raw_model, head=0)
-        if _grams is not None:
-            history["gram_hessian"].append(_grams)
-            history["gram_hessian_iters"].append(iter_num)
-        for blk in _raw_model.blocks:
-            blk.attn._cache_attn = False
-            blk.attn.last_att = None
-        _raw_model.train()
-
     # ---- Standard training step ----
     layer_entropies: list[float] = [0.0] * n_layers
-    layer_sims: list[list[float]] = [[] for _ in range(n_layers)]
-    cov_stable_rank_post_attn: list[float] = [0.0] * n_layers
-    cov_stable_rank_post_ffn: list[float] = [0.0] * n_layers
     _need_entropy = iter_num % cfg.entropy_intv == 0
 
-    # Enable attention caching only when entropy/similarity will be read.
+    # Enable attention caching only when entropy will be read.
     if _need_entropy:
         for blk in _raw_model.blocks:
             blk.attn._cache_attn = True
@@ -586,26 +514,14 @@ for iter_num in range(iter_num, cfg.max_iters):
         if _need_entropy:
             with torch.no_grad():
                 layer_entropies = get_attention_entropy(_raw_model)
-                layer_sims = get_attention_similarity(_raw_model)
             for blk in _raw_model.blocks:
                 blk.attn._cache_attn = False
-                blk.attn.last_att = None  # free GPU memory immediately
+                blk.attn.last_att = None  # free cached attention immediately
 
     loss.backward()
     if cfg.grad_clip > 0.0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
     optimizer.step()
-
-    # ---- Feature covariance stable rank (att_sim only) ----
-    if _need_entropy and cfg.att_sim:
-        _cov = get_feature_covariance_stable_rank(
-            _raw_model,
-            X,
-            hessian_batch_size=cfg.hessian_batch_size,
-            max_iter=cfg.hessian_max_iter,
-        )
-        cov_stable_rank_post_attn = _cov["post_attn"]
-        cov_stable_rank_post_ffn = _cov["post_ffn"]
 
     loss_val = loss.item()
     with torch.no_grad():
@@ -615,9 +531,6 @@ for iter_num in range(iter_num, cfg.max_iters):
     history["acc"].append(train_acc)
     history["lr"].append(lr)
     history["entropy"].append(layer_entropies)
-    history["similarity"].append(layer_sims)
-    history["cov_stable_rank_post_attn"].append(cov_stable_rank_post_attn)
-    history["cov_stable_rank_post_ffn"].append(cov_stable_rank_post_ffn)
 
     # pre-fetch next batch
     X, Y = next(train_iter)
@@ -632,21 +545,6 @@ for iter_num in range(iter_num, cfg.max_iters):
                 f"iter {iter_num:5d} | loss {loss_val:.4f} | acc {train_acc:.1f}% "
                 f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
             )
-            if iter_num % cfg.entropy_intv == 0:
-                _sim_str = "  ".join(
-                    f"L{i}:[" + ",".join(f"{v:.3f}" for v in hs) + "]"
-                    for i, hs in enumerate(layer_sims)
-                )
-                print(f"  attn_sim(all_h): {_sim_str}")
-                if cfg.att_sim:
-                    _cov_str_attn = "  ".join(
-                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_attn)
-                    )
-                    _cov_str_ffn = "  ".join(
-                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_ffn)
-                    )
-                    print(f"  cov_sr(post_attn): {_cov_str_attn}")
-                    print(f"  cov_sr(post_ffn):  {_cov_str_ffn}")
             if iter_num % cfg.hessian_intv == 0:
                 _cmsg = (
                     f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
@@ -692,34 +590,13 @@ for iter_num in range(iter_num, cfg.max_iters):
                         for i, v in enumerate(layer_entropies)
                     }
                 )
-                log_dict.update(
-                    {
-                        f"attn_sim/layer_{i}_head_{j}": v
-                        for i, hs in enumerate(layer_sims)
-                        for j, v in enumerate(hs)
-                    }
-                )
-                if cfg.att_sim:
-                    log_dict.update(
-                        {
-                            f"cov_sr/post_attn_layer_{i}": v
-                            for i, v in enumerate(cov_stable_rank_post_attn)
-                        }
-                    )
-                    log_dict.update(
-                        {
-                            f"cov_sr/post_ffn_layer_{i}": v
-                            for i, v in enumerate(cov_stable_rank_post_ffn)
-                        }
-                    )
             wandb.log(log_dict, step=iter_num)
 
 # ---------------------------------------------------------------------------
 # 10.  Final checkpoint & history
 # ---------------------------------------------------------------------------
 _save_checkpoint("final_ckpt")
-
-save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, att_sim=cfg.att_sim)
+save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank)
 
 # ---------------------------------------------------------------------------
 # 11.  DDP teardown

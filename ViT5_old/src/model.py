@@ -1,54 +1,43 @@
 """
-HookedViT5 — ViT-5 model for entropy-collapse experiments.
+HookedViT5 — ViT-5-Base model for entropy-collapse experiments.
 
 ViT-5 (Wang et al., 2026, arXiv:2602.08071) modernises the canonical ViT
-architecture. This module ports the architecture directly from the official
-implementation (https://github.com/wangf3014/ViT-5/blob/main/models_vit5.py),
-adapted for the entropy-collapse framework:
+architecture with the following components, all active by default in the
+Base variant used here:
 
   * 2-D Rotary Position Embedding (RoPE) on patch tokens, plus a separate
-    low-theta RoPE for register tokens (``src/rope.py``).
+    low-theta RoPE for register tokens.
   * Register tokens (4 by default) appended after the patch sequence.
   * RMSNorm as the normalisation layer (instead of LayerNorm).
   * QK-normalisation on queries and keys (per-head RMSNorm).
-  * Layer-scale initialisation (gamma_1 / gamma_2 learnable scalars per block).
+  * Layer-scale initialisation (γ₁ / γ₂ learnable scalars per block).
   * Standard Transformer Mlp with GELU activation (mlp_ratio=4).
-  * Absolute position embedding (APE) kept alongside RoPE, as in upstream.
 
-Deviations from the official (image-classification-pretraining) repo, required
-by the entropy-collapse framework (mirrors ``ViT/src/model.py``'s conventions):
-
-  * Flash-attention is **not implemented** — the explicit softmax path is
-    always used, since it is required for (a) attention-matrix caching and
-    (b) second-order gradient computation via ``torch.autograd`` (Hessian /
-    curvature metrics in ``common/helpers.py``).
-  * Per-layer attention-matrix caching (``block.attn.last_att``), enabled via
-    ``block.attn._cache_attn = True``, so entropy can be computed after a
-    forward pass without re-running inference.
-  * Runtime attention-temperature support: set ``attn.temperature`` on any
-    block (or call ``set_attention_temperature``) to scale attention logits
-    for entropy-collapse intervention experiments.
-  * The fused QKV projection is named ``attn.qkv`` (matching upstream) so
-    that ``common/helpers.py``'s ``get_VV_subspace_mask()`` (which detects
-    the value-projection subspace from the ``.attn.qkv.weight`` suffix) works
-    unmodified.
+Additions for entropy-collapse experiments (mirrors ViT/src/model.py):
+  * Per-layer attention-matrix caching (``block.attn.last_att``) so that
+    entropy can be computed after every forward pass without re-running
+    inference.  Enabled per-block via ``block.attn._cache_attn = True``.
+  * Flash / SDPA attention is **always disabled**; the explicit softmax
+    path is required for (a) attention caching and (b) second-order
+    gradient computation via ``torch.autograd``.
+  * Runtime attention temperature support: set ``attn.temperature`` on
+    any block (or call ``set_attention_temperature``) to scale logits for
+    entropy-collapse intervention experiments.
 
 Usage::
 
     from src.model import build_hooked_vit5
 
-    # CIFAR-100 (32x32, patch_size=4, 64 patches + cls + 4 registers)
+    # CIFAR-100 (32×32, patch_size=4, 64 patches)
     model = build_hooked_vit5(
-        model_name="vit5_small",
         num_classes=100,
         img_size=32,
         patch_size=4,
-        drop_path_rate=0.1,
+        drop_path_rate=0.2,
     )
 
-    # ImageNet-1k (192x192, patch_size=16, 144 patches + cls + 4 registers)
+    # ImageNet-1k (192×192, patch_size=16, 144 patches)
     model = build_hooked_vit5(
-        model_name="vit5_base",
         num_classes=1000,
         img_size=192,
         patch_size=16,
@@ -58,31 +47,18 @@ Usage::
 
 from __future__ import annotations
 
+import math
+from functools import partial
 from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-try:
-    from timm.layers import DropPath, Mlp, PatchEmbed, trunc_normal_
-except ImportError:  # pragma: no cover - fallback for older timm releases
-    from timm.models.layers import DropPath, trunc_normal_
-    from timm.models.vision_transformer import Mlp, PatchEmbed
+from timm.models.vision_transformer import Mlp, PatchEmbed
+from timm.models.layers import DropPath, trunc_normal_
 
 from .rope import VisionRotaryEmbedding
-
-
-# ---------------------------------------------------------------------------
-# Model-size registry — embed_dim / depth / num_heads for each ViT-5 variant.
-# Mirrors the official repo's vit5_small / vit5_base / vit5_large presets
-# (mlp_ratio=4, qkv_bias=False, num_registers=4, reg_theta=100, qk_norm=True,
-# rope=True, layer_scale=True for all sizes).
-# ---------------------------------------------------------------------------
-MODEL_SIZES: dict[str, dict[str, int]] = {
-    "vit5_small": {"embed_dim": 384, "depth": 12, "num_heads": 6},
-    "vit5_base": {"embed_dim": 768, "depth": 12, "num_heads": 12},
-    "vit5_large": {"embed_dim": 1024, "depth": 24, "num_heads": 16},
-}
 
 
 # ---------------------------------------------------------------------------
@@ -105,20 +81,53 @@ class RMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
+class SwiGLU(nn.Module):
+    """SwiGLU feed-forward block (defined for completeness; not used in Base)."""
+
+    def __init__(
+        self,
+        in_features: int,
+        hidden_features: Optional[int] = None,
+        out_features: Optional[int] = None,
+        act_layer=nn.SiLU,
+        drop: float = 0.0,
+        norm_layer=nn.LayerNorm,
+        subln: bool = False,
+    ) -> None:
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+
+        self.w1 = nn.Linear(in_features, hidden_features, bias=False)
+        self.w2 = nn.Linear(in_features, hidden_features, bias=False)
+        self.act = act_layer()
+        self.ffn_ln = norm_layer(hidden_features) if subln else nn.Identity()
+        self.w3 = nn.Linear(hidden_features, out_features, bias=False)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x1 = self.w1(x)
+        x2 = self.w2(x)
+        hidden = self.act(x1) * x2
+        x = self.ffn_ln(hidden)
+        x = self.w3(x)
+        x = self.drop(x)
+        return x
+
+
 class Attention(nn.Module):
     """
     Multi-head self-attention with:
       * Optional QK-normalisation (per-head RMSNorm on Q and K).
-      * 2-D RoPE for patch tokens and a separate low-theta RoPE for register
-        tokens.
-      * Attention caching: set ``self._cache_attn = True`` before the forward
-        pass to store the attention weights in ``self.last_att``
-        (shape: B x num_heads x N x N).
+      * 2-D RoPE for patch tokens and register tokens.
+      * Attention caching: set ``self._cache_attn = True`` before the
+        forward pass to store the attention weights in ``self.last_att``
+        (shape: B × num_heads × N × N).
       * Runtime temperature scaling via ``self.temperature`` (default 1.0).
         Values > 1 soften the distribution; < 1 sharpen it.
 
-    Always uses the explicit softmax path (no flash-attn / SDPA), required
-    for Hessian computation and attention-entropy measurement.
+    Flash / SDPA is always disabled here to keep the explicit softmax path
+    required for Hessian computation and attention entropy measurement.
     """
 
     def __init__(
@@ -165,11 +174,6 @@ class Attention(nn.Module):
             self.q_norm = RMSNorm(head_dim, eps=1e-6)
             self.k_norm = RMSNorm(head_dim, eps=1e-6)
 
-        # Runtime intervention / caching state (mirrors ViT/'s conventions).
-        self.temperature: float = 1.0
-        self._cache_attn: bool = False
-        self.last_att: Optional[torch.Tensor] = None
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, N, C = x.shape
         # Register tokens are appended at the end of the sequence:
@@ -186,7 +190,7 @@ class Attention(nn.Module):
             q = self.q_norm(q).to(qk_dtype)
             k = self.k_norm(k).to(qk_dtype)
 
-        # Apply patch RoPE (tokens 1 .. reg_idx-1; token 0 is the CLS token).
+        # Apply patch RoPE (tokens 1 … reg_idx-1; token 0 is the CLS token).
         if self.rope is not None:
             q = torch.cat(
                 (q[:, :1], self.rope(q[:, 1:reg_idx]), q[:, reg_idx:]), dim=1
@@ -195,7 +199,7 @@ class Attention(nn.Module):
                 (k[:, :1], self.rope(k[:, 1:reg_idx]), k[:, reg_idx:]), dim=1
             )
 
-        # Apply register RoPE (tokens reg_idx .. N-1).
+        # Apply register RoPE (tokens reg_idx … N-1).
         if self.rope_reg is not None:
             q = torch.cat(
                 (q[:, :1], q[:, 1:reg_idx], self.rope_reg(q[:, reg_idx:])), dim=1
@@ -210,12 +214,12 @@ class Attention(nn.Module):
         v_t = v.transpose(1, 2)
 
         # Explicit softmax attention — always used (no flash / SDPA).
-        temperature = self.temperature if self.temperature else 1.0
+        temperature = getattr(self, "temperature", 1.0)
         attn = (q_t * (self.scale / temperature)) @ k_t.transpose(-2, -1)  # (B, nh, N, N)
         attn = attn.softmax(dim=-1)
 
         # Cache for entropy computation — only when enabled.
-        if self._cache_attn:
+        if getattr(self, "_cache_attn", False):
             self.last_att = attn.detach()
 
         attn = self.attn_drop(attn)
@@ -245,7 +249,9 @@ class Block(nn.Module):
         attn_drop: float = 0.0,
         drop_path: float = 0.0,
         act_layer=nn.GELU,
-        norm_layer=RMSNorm,
+        norm_layer=nn.LayerNorm,
+        Attention_block=Attention,
+        Mlp_block=Mlp,
         init_values: float = 1e-4,
         rope_size: int = 0,
         rope_reg_size: int = 0,
@@ -256,7 +262,7 @@ class Block(nn.Module):
     ) -> None:
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.attn = Attention(
+        self.attn = Attention_block(
             dim,
             num_heads=num_heads,
             qkv_bias=qkv_bias,
@@ -272,7 +278,7 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(
+        self.mlp = Mlp_block(
             in_features=dim,
             hidden_features=mlp_hidden_dim,
             act_layer=act_layer,
@@ -306,7 +312,7 @@ class vit_models(nn.Module):
       * QK-normalisation (per-head RMSNorm on Q and K).
       * 2-D RoPE for patch and register token positions.
       * Register tokens (``num_registers``) appended after patches.
-      * Layer-scale (learnable gamma_1 / gamma_2 per block, init = ``init_scale``).
+      * Layer-scale (learnable γ₁ / γ₂ per block, init = ``init_scale``).
       * No QKV bias (``qkv_bias=False``).
 
     The absolute position embedding (APE) is kept alongside RoPE as in the
@@ -328,15 +334,20 @@ class vit_models(nn.Module):
         drop_rate: float = 0.0,
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
-        norm_layer=RMSNorm,
+        norm_layer=nn.LayerNorm,
         ape: bool = True,
+        block_layers=Block,
+        Patch_layer=PatchEmbed,
         act_layer=nn.GELU,
+        Attention_block=Attention,
+        Mlp_block=Mlp,
         init_scale: float = 1e-4,
-        rope: bool = True,
-        num_registers: int = 4,
-        qk_norm: bool = True,
-        reg_theta: float = 100,
+        rope: bool = False,
+        num_registers: int = 0,
+        qk_norm: bool = False,
+        reg_theta: float = 10000,
         layer_scale: bool = True,
+        **kwargs,
     ) -> None:
         super().__init__()
         self.dropout_rate = drop_rate
@@ -344,7 +355,7 @@ class vit_models(nn.Module):
         self.num_features = self.embed_dim = embed_dim
         self.num_registers = num_registers
 
-        self.patch_embed = PatchEmbed(
+        self.patch_embed = Patch_layer(
             img_size=img_size,
             patch_size=patch_size,
             in_chans=in_chans,
@@ -373,23 +384,23 @@ class vit_models(nn.Module):
         # Stochastic depth: linearly spaced from 0 to drop_path_rate.
         dpr = torch.linspace(0, drop_path_rate, depth).tolist()
 
-        rope_size = img_size // patch_size if rope else 0
-
         self.blocks = nn.ModuleList(
             [
-                Block(
+                block_layers(
                     dim=embed_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
-                    drop=drop_rate,
+                    drop=0.0,
                     attn_drop=attn_drop_rate,
                     drop_path=dpr[i],
                     norm_layer=norm_layer,
                     act_layer=act_layer,
+                    Attention_block=Attention_block,
+                    Mlp_block=Mlp_block,
                     init_values=init_scale,
-                    rope_size=rope_size,
+                    rope_size=img_size // patch_size if rope else 0,
                     rope_reg_size=rope_reg_size,
                     num_registers=num_registers,
                     qk_norm=qk_norm,
@@ -401,10 +412,14 @@ class vit_models(nn.Module):
         )
 
         self.norm = norm_layer(embed_dim)
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
+        self.head = (
+            nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        )
+
+        # Weight initialisation.
         trunc_normal_(self.cls_token, std=0.02)
-        if ape:
+        if self.pos_embed is not None:
             trunc_normal_(self.pos_embed, std=0.02)
         if num_registers > 0:
             trunc_normal_(self.reg_token, std=0.02)
@@ -415,17 +430,27 @@ class vit_models(nn.Module):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, (nn.LayerNorm, RMSNorm)):
-            if hasattr(m, "bias") and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
     @torch.jit.ignore
-    def no_weight_decay(self) -> set[str]:
+    def no_weight_decay(self):
         return {"pos_embed", "cls_token", "reg_token"}
 
-    def get_num_layers(self) -> int:
+    def get_classifier(self):
+        return self.head
+
+    def get_num_layers(self):
         return len(self.blocks)
+
+    def reset_classifier(self, num_classes: int, global_pool: str = "") -> None:
+        self.num_classes = num_classes
+        self.head = (
+            nn.Linear(self.embed_dim, num_classes)
+            if num_classes > 0
+            else nn.Identity()
+        )
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         B = x.shape[0]
@@ -436,9 +461,11 @@ class vit_models(nn.Module):
             self.reg_token.expand(B, -1, -1) if self.reg_token is not None else None
         )
 
+        # Add absolute position embedding to patch tokens.
         if self.pos_embed is not None:
             x = x + self.pos_embed
 
+        # Concatenate: [cls | patches | registers]
         x = torch.cat((cls_tokens, x), dim=1)
         if registers is not None:
             x = torch.cat((x, registers), dim=1)
@@ -447,140 +474,119 @@ class vit_models(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
-        return x[:, 0]
+        return x[:, 0]  # CLS token output
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.forward_features(x)
         if self.dropout_rate:
-            x = nn.functional.dropout(x, p=float(self.dropout_rate), training=self.training)
+            x = F.dropout(x, p=float(self.dropout_rate), training=self.training)
         x = self.head(x)
         return x
 
 
 # ---------------------------------------------------------------------------
-# Public builder API — mirrors ViT/src/model.py's build_hooked_vit() signature.
+# Public API
 # ---------------------------------------------------------------------------
 
+
 def build_hooked_vit5(
-    model_name: str = "vit5_base",
-    num_classes: int = 10,
-    img_size: int = 224,
-    patch_size: Optional[int] = None,
+    num_classes: int = 1000,
+    img_size: int = 192,
+    patch_size: int = 16,
+    drop_path_rate: float = 0.2,
     num_registers: int = 4,
-    qk_norm: bool = True,
-    reg_theta: float = 100,
-    drop_path_rate: float = 0.0,
     init_std: float = 0.02,
     use_scaled_init: bool = False,
-    depth: Optional[int] = None,
-    num_heads: Optional[int] = None,
-    embed_dim: Optional[int] = None,
     device: str = "cuda",
 ) -> torch.nn.Module:
     """
-    Build and return a ViT-5 model patched for entropy-collapse experiments.
+    Build and return a ViT-5-Base model ready for entropy-collapse experiments.
 
-    Unlike ``ViT/src/model.py``'s ``build_hooked_vit()`` (which patches a
-    timm-provided model via monkey-patching), this builds the custom
-    ``vit_models`` class directly — the attention caching / temperature hooks
-    are native to ``Attention.forward`` above, so no patching step is needed.
+    Architecture (fixed, matches ``vit5_base`` in the official repo):
+      * embed_dim = 768, depth = 12, num_heads = 12, mlp_ratio = 4
+      * RMSNorm, QK-norm, 2-D RoPE, register tokens, layer scale
+      * Absolute position embedding + RoPE (as in the official code)
+
+    Only ``num_classes``, ``img_size``, ``patch_size``, and
+    ``drop_path_rate`` differ between the CIFAR-100 and ImageNet-1k
+    presets.
 
     Args:
-        model_name:       One of ``'vit5_small'``, ``'vit5_base'``,
-                          ``'vit5_large'`` (see ``MODEL_SIZES``).
-        num_classes:      Number of output classes.
-        img_size:         Input spatial resolution.
-        patch_size:       Patch size (e.g. 4 for CIFAR-100, 16 for ImageNet-1k).
-                          Required (no default) since it depends on the dataset.
-        num_registers:    Number of register tokens; must be a perfect square.
-        qk_norm:          Enable per-head RMSNorm on Q/K (ViT-5-Base default: True).
-        reg_theta:        RoPE base frequency for register tokens (default 100).
-        drop_path_rate:   Stochastic depth rate (linearly scaled across layers).
-        init_std:         Std for ``trunc_normal_`` weight initialisation.
-        use_scaled_init:  If True, additionally scale ``attn.proj`` weights by
-                          ``init_std / sqrt(2 * depth)` (ViT/'s residual-depth
-                          scaling convention). Off by default since layer-scale
-                          already provides depth-dependent residual scaling.
-        depth:            Override the number of transformer layers. ``None``
-                          uses the ``model_name`` preset default.
-        num_heads:        Override the number of attention heads. ``None``
-                          uses the ``model_name`` preset default.
-        embed_dim:        Override the embedding dimension. ``None`` uses the
-                          ``model_name`` preset default.
+        num_classes:      Output vocabulary size (100 for CIFAR-100,
+                          1000 for ImageNet-1k).
+        img_size:         Spatial resolution (32 for CIFAR-100, 192 for
+                          ImageNet-1k as per the ViT-5-Base paper recipe).
+        patch_size:       Patch stride (4 for CIFAR-100 → 64 patches;
+                          16 for ImageNet-1k → 144 patches at 192×192).
+        drop_path_rate:   Stochastic depth rate (ViT-5-Base default: 0.2).
+        num_registers:    Number of register tokens (default 4, must be a
+                          perfect square).
+        init_std:         Std for weight re-initialisation.  The in-class
+                          default of 0.02 matches the ViT-5 paper.
+        use_scaled_init:  If True, scales ``attn.proj.weight`` by
+                          ``init_std / sqrt(2 * depth)`` — the same
+                          NanoGPT-style depth scaling used in ViT/.
+                          Defaults to False since ViT-5 uses layer-scale.
         device:           Target device string.
 
     Returns:
-        A ``vit_models`` instance ready for entropy-collapse experiments.
+        A ``vit_models`` instance with flash attention disabled and
+        hooks installed for entropy and Hessian experiments.
     """
-    if model_name not in MODEL_SIZES:
-        raise ValueError(
-            f"Unknown model_name '{model_name}'. Available: {list(MODEL_SIZES)}."
-        )
-    if patch_size is None:
-        raise ValueError("patch_size must be specified explicitly.")
-
-    preset = MODEL_SIZES[model_name]
-    _embed_dim = embed_dim if embed_dim is not None else preset["embed_dim"]
-    _depth = depth if depth is not None else preset["depth"]
-    _num_heads = num_heads if num_heads is not None else preset["num_heads"]
-
     model = vit_models(
         img_size=img_size,
         patch_size=patch_size,
-        num_classes=num_classes,
-        embed_dim=_embed_dim,
-        depth=_depth,
-        num_heads=_num_heads,
-        mlp_ratio=4.0,
+        embed_dim=768,
+        depth=12,
+        num_heads=12,
+        mlp_ratio=4,
         qkv_bias=False,
-        drop_path_rate=drop_path_rate,
-        norm_layer=RMSNorm,
-        ape=True,
-        rope=True,
         num_registers=num_registers,
-        qk_norm=qk_norm,
-        reg_theta=reg_theta,
+        norm_layer=partial(RMSNorm, eps=1e-6),
+        block_layers=Block,
+        rope=True,
+        reg_theta=100,
+        qk_norm=True,
+        drop_path_rate=drop_path_rate,
+        num_classes=num_classes,
         layer_scale=True,
+        init_scale=1e-4,
     )
 
-    # Re-initialise Linear/Embedding weights with the requested std (the
-    # class __init__ already applies trunc_normal_(std=0.02) by default;
-    # this overrides it when a different init_std is requested).
-    if init_std != 0.02:
-        def _init_weights(module: torch.nn.Module) -> None:
-            if isinstance(module, torch.nn.Linear):
-                trunc_normal_(module.weight, std=init_std)
-                if module.bias is not None:
-                    torch.nn.init.zeros_(module.bias)
+    # Re-apply custom weight initialisation (overrides in-class default).
+    def _init_weights(module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=init_std)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=init_std)
 
-        model.apply(_init_weights)
+    model.apply(_init_weights)
 
     if use_scaled_init:
-        import math
-
         n_layers = len(model.blocks)
         scale = init_std / math.sqrt(2 * n_layers)
         for name, param in model.named_parameters():
             if name.endswith("attn.proj.weight"):
-                trunc_normal_(param, std=scale)
+                nn.init.normal_(param, mean=0.0, std=scale)
 
     model.to(device)
     return model
 
 
-def set_attention_temperature(model: torch.nn.Module, temperature: float) -> None:
+def set_attention_temperature(
+    model: torch.nn.Module, temperature: float
+) -> None:
     """
-    Set the attention temperature on every transformer block of a
-    (possibly DDP-wrapped) ViT-5 model.
+    Set the attention temperature on every transformer block.
 
     A temperature > 1 softens the attention distribution (higher entropy);
-    a temperature < 1 sharpens it (lower entropy). The change is applied
-    in-place and persists for all subsequent forward passes.
+    < 1 sharpens it.  The change is in-place and persistent.
 
     Args:
-        model:       A ``vit_models`` instance, or a ``DistributedDataParallel``
-                     wrapper around one.
-        temperature: Positive float. 1.0 restores the default behaviour.
+        model:       A ``vit_models`` instance or its DDP wrapper.
+        temperature: Positive float.  1.0 restores default behaviour.
     """
     raw = model.module if hasattr(model, "module") else model
     for block in raw.blocks:

@@ -1,34 +1,25 @@
 """
-2-D Rotary Position Embedding (RoPE) for ViT-5.
+2-D Rotary Position Embedding for ViT-5.
 
-Ported from the official ViT-5 implementation:
+Adapted from the official ViT-5 implementation:
     https://github.com/wangf3014/ViT-5/blob/main/rope.py
 
-Key change from upstream: replaced the hard-coded ``.cuda()`` call in
-``VisionRotaryEmbedding.forward`` with a device-agnostic
-``torch.arange(..., device=x.device)`` so the module works on CPU / MPS / any
-CUDA device without modification.
+Key change from upstream: replaced hard-coded ``.cuda()`` calls with
+device-agnostic ``device=x.device`` so the module works on CPU and MPS too.
 """
 
-from __future__ import annotations
-
-import math
 from math import pi
+import math
 
-import numpy as np
 import torch
 import torch.nn.functional as F
-from einops import rearrange, repeat
 from torch import nn
 
+from einops import rearrange, repeat
+import numpy as np
 
-def broadcat(freqss: list[torch.Tensor], dim: int = -1) -> torch.Tensor:
-    """Broadcast-concatenate a list of tensors along ``dim``.
 
-    All tensors must share the same number of dimensions; every dimension
-    other than ``dim`` must either match exactly or be broadcastable
-    (i.e. take at most two distinct sizes across the inputs).
-    """
+def broadcat(freqss, dim=-1):
     num_freqss = len(freqss)
     shape_lens = set(list(map(lambda t: len(t.shape), freqss)))
     assert len(shape_lens) == 1, "freqss must all have the same number of dimensions"
@@ -47,8 +38,7 @@ def broadcat(freqss: list[torch.Tensor], dim: int = -1) -> torch.Tensor:
     return torch.cat(freqss, dim=dim)
 
 
-def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    """Rotate the last dimension of ``x`` by swapping and negating pairs."""
+def rotate_half(x):
     x = rearrange(x, "... (d r) -> ... d r", r=2)
     x1, x2 = x.unbind(dim=-1)
     x = torch.stack((-x2, x1), dim=-1)
@@ -60,30 +50,28 @@ class VisionRotaryEmbedding(nn.Module):
     2-D rotary embedding for vision patch sequences.
 
     ``pt_seq_len`` is the training-time grid side-length (e.g. 14 for a
-    224x224 image with ``patch_size=16``). At inference the frequencies are
-    interpolated (via ``torch.arange(..., ) / ft_seq_len * pt_seq_len``) to
-    fit the actual sequence length, so a model trained at one resolution can
-    be evaluated at another.
+    224-image with patch_size=16).  At inference the frequencies are
+    interpolated to fit the actual sequence length.
 
     Args:
         dim:        Half of the head dimension (``head_dim // 2``).
         pt_seq_len: Training spatial grid size (one side of the square grid).
-        theta:      Base frequency (default 10000; ViT-5 uses ``theta=100``
-                    for the separate register-token RoPE).
+        theta:      Base frequency (default 10000, set to 100 for registers
+                    per the ViT-5 paper).
     """
 
     def __init__(
         self,
-        dim: int,
-        pt_seq_len: int = 14,
-        custom_freqs: torch.Tensor | None = None,
-        freqs_for: str = "lang",
-        theta: float = 10000,
-        max_freq: float = 10,
-        num_freqs: int = 1,
-    ) -> None:
+        dim,
+        pt_seq_len=14,
+        custom_freqs=None,
+        freqs_for="lang",
+        theta=10000,
+        max_freq=10,
+        num_freqs=1,
+    ):
         super().__init__()
-        if custom_freqs is not None:
+        if custom_freqs:
             freqs = custom_freqs
         elif freqs_for == "lang":
             freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
@@ -97,36 +85,32 @@ class VisionRotaryEmbedding(nn.Module):
         self.pt_seq_len = pt_seq_len
         self.register_buffer("freqs", freqs)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x):
         """
         Apply 2-D RoPE to a patch sequence.
 
         Args:
-            x: Tensor of shape ``(B, N, num_heads, head_dim)`` where ``N``
-               must be a perfect square (the spatial patch grid).
+            x: Tensor of shape ``(B, N, num_heads, head_dim)`` where
+               ``N`` must be a perfect square (the spatial patch grid).
 
         Returns:
             Tensor of the same shape with rotary encodings applied.
         """
         ft_seq_len = int(np.sqrt(x.shape[1]))
-        # Device-agnostic range (upstream hard-codes `.cuda()`).
+        # Device-agnostic range (upstream used hard-coded .cuda())
         t = torch.arange(ft_seq_len, device=x.device).float() / ft_seq_len * self.pt_seq_len
 
         freqs = torch.einsum("..., f -> ... f", t, self.freqs)
-        freqs = repeat(freqs, "... n -> ... (n r)", r=2)  # (ft_seq_len, dim)
+        freqs = repeat(freqs, "... n -> ... (n r)", r=2)          # (ft_seq_len, dim)
         freqs = broadcat((freqs[:, None, :], freqs[None, :, :]), dim=-1)  # (ft_seq_len, ft_seq_len, 2*dim)
 
-        freqs_cos = freqs.cos().view(-1, 1, freqs.shape[-1])  # (N, 1, head_dim)
+        freqs_cos = freqs.cos().view(-1, 1, freqs.shape[-1])   # (N, 1, head_dim)
         freqs_sin = freqs.sin().view(-1, 1, freqs.shape[-1])
         return x * freqs_cos + rotate_half(x) * freqs_sin
 
 
-def rotate_freqs(freqs: torch.Tensor, angle_deg: float) -> torch.Tensor:
-    """Rotate a 2-D frequency map by ``angle_deg`` degrees (bilinear interpolation).
-
-    Not used by the default ViT-5-Base training recipe; kept for parity with
-    the official implementation in case downstream analysis needs it.
-    """
+def rotate_freqs(freqs, angle_deg):
+    """Rotate a 2-D frequency map by ``angle_deg`` degrees (bilinear interpolation)."""
     assert freqs.ndim == 4 and freqs.shape[0] == freqs.shape[1], (
         "Input must have shape (n, n, d1, d2)"
     )
