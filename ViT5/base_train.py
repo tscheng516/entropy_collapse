@@ -16,6 +16,7 @@ Logged every ``eval_interval``:
 Logged every ``hessian_intv``:
   * Curvature proxies — lambda_max of H, Prec_H, H_VV, GN, Diag_H, Fisher
     (+ KFAC, BFGS and FD when compute_fd=True)
+    (+ H_QQ, H_KK when compute_more=True)
 
 Logged every ``entropy_intv``:
   * Per-layer attention entropy
@@ -348,6 +349,8 @@ if cfg.wandb_log:
 #     diag_h    — max(diag(H))                Bekas-Kokiopoulou-Saad estimator
 #     fisher    — lambda_max(F)               empirical Fisher
 #     kfac      — max lambda_max(A)*lambda_max(G)  K-FAC Kronecker proxy
+#     hessian_qq— lambda_max(H_QQ)            H restricted to query-proj subspace (compute_more=True)
+#     hessian_kk— lambda_max(H_KK)            H restricted to key-proj subspace   (compute_more=True)
 # ---------------------------------------------------------------------------
 from common.helpers import (
     get_VV_subspace_mask,
@@ -362,7 +365,9 @@ from common.helpers import (
 
 # Unwrap DDP to get the underlying module for mask / entropy helpers
 _raw_model = model.module if use_ddp else model
-vv_mask = get_VV_subspace_mask(_raw_model).to(device)
+vv_mask = get_VV_subspace_mask(_raw_model, component="v").to(device)
+qq_mask = get_VV_subspace_mask(_raw_model, component="q").to(device)
+kk_mask = get_VV_subspace_mask(_raw_model, component="k").to(device)
 
 
 @torch.no_grad()
@@ -431,6 +436,8 @@ history: dict[str, list] = {
     "fisher": [],
     "bfgs": [],
     "kfac": [],
+    "hessian_qq": [],
+    "hessian_kk": [],
     "entropy": [],
     "similarity": [],
     "cov_stable_rank_post_attn": [],
@@ -523,6 +530,8 @@ for iter_num in range(iter_num, cfg.max_iters):
         "fisher": 0.0,
         "bfgs": 0.0,
         "kfac": 0.0,
+        "hessian_qq": 0.0,
+        "hessian_kk": 0.0,
     }
     if iter_num % cfg.hessian_intv == 0:
         _raw_model.train()
@@ -538,6 +547,9 @@ for iter_num in range(iter_num, cfg.max_iters):
                 compute_fd=cfg.compute_fd,
                 hessian_batch_size=cfg.hessian_batch_size,
                 label_smoothing=cfg.label_smoothing,
+                compute_more=cfg.compute_more,
+                qq_mask=qq_mask,
+                kk_mask=kk_mask,
             )
         except Exception as exc:
             if _is_master:
@@ -545,7 +557,10 @@ for iter_num in range(iter_num, cfg.max_iters):
         finally:
             optimizer.zero_grad()
 
-    for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd", "diag_h", "fisher", "bfgs", "kfac"):
+    for k in (
+        "hessian", "prec_h", "hessian_vv", "gn", "fd", "diag_h", "fisher", "bfgs", "kfac",
+        "hessian_qq", "hessian_kk",
+    ):
         history[k].append(curvature[k])
 
     # ---- Attention Gram matrix snapshot (head=0, all layers, hessian batch) ----
@@ -659,6 +674,11 @@ for iter_num in range(iter_num, cfg.max_iters):
                         f" | FD {curvature['fd']:.3f}"
                         f" | KFAC {curvature['kfac']:.3f}"
                     )
+                if cfg.compute_more:
+                    _cmsg += (
+                        f" | H_QQ {curvature['hessian_qq']:.3f}"
+                        f" | H_KK {curvature['hessian_kk']:.3f}"
+                    )
                 print(_cmsg)
         if cfg.wandb_log and (not use_ddp or rank == 0):
             log_dict: dict = {
@@ -683,6 +703,13 @@ for iter_num in range(iter_num, cfg.max_iters):
                             "hessian/FD": curvature["fd"],
                             "hessian/BFGS": curvature["bfgs"],
                             "hessian/KFAC": curvature["kfac"],
+                        }
+                    )
+                if cfg.compute_more:
+                    log_dict.update(
+                        {
+                            "hessian/H_QQ": curvature["hessian_qq"],
+                            "hessian/H_KK": curvature["hessian_kk"],
                         }
                     )
             if iter_num % cfg.entropy_intv == 0:

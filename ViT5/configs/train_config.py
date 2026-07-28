@@ -133,6 +133,9 @@ class TrainConfig:
     # Samples sliced from the training batch for curvature estimation.
     compute_fd: bool = False
     # Enable finite-difference proxies (BFGS, FD) and K-FAC; costs extra passes.
+    compute_more: bool = False
+    # Enable hessian_qq/hessian_kk proxies (H restricted to the query/key
+    # projection subspaces); costs two extra power-iteration passes.
 
     # ------------------------------------------------------------------ #
     # Attention entropy

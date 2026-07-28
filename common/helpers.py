@@ -10,51 +10,63 @@ from torch.func import functional_call
 from torch.autograd import functional as autograd_functional
 
 
-def get_VV_subspace_mask(model: torch.nn.Module) -> torch.Tensor:
+def get_VV_subspace_mask(
+    model: torch.nn.Module, component: str = "v"
+) -> torch.Tensor:
     """
-    Build a flat binary mask selecting only the value-projection parameters
-    of every attention layer.
+    Build a flat binary mask selecting only the parameters of a single
+    Q/K/V projection component, for every attention layer.
 
     Architecture is auto-detected from parameter names:
 
-    * ViT: Q, K, V are fused into a
-      single ``attn.qkv`` weight of shape ``(3*dim, dim)``.  Value weights
-      occupy rows ``2*d : 3*d``.  Optional ``attn.qkv.bias`` handled
-      similarly (last third of the bias vector).
+    * ViT / ViT5: Q, K, V are fused into a
+      single ``attn.qkv`` weight of shape ``(3*dim, dim)``.  Rows
+      ``0 : d`` are Q, ``d : 2*d`` are K, and ``2*d : 3*d`` are V.
+      Optional ``attn.qkv.bias`` handled similarly (thirds of the bias
+      vector).
 
     * nanochat: Uses separate ``attn.c_q``, ``attn.c_k``,
-      ``attn.c_v`` linear layers.  The entire ``attn.c_v.weight`` tensor
-      is selected.
+      ``attn.c_v`` linear layers.  The entire weight tensor of the
+      requested component is selected.
 
     Args:
-        model: Any HookedViT or HookedGPT model.
+        model:     Any HookedViT or HookedGPT model.
+        component: Which projection to mask — ``"q"``, ``"k"``, or ``"v"``
+                    (default ``"v"``, preserving prior behaviour).
 
     Returns:
         1-D float tensor on CPU, same length as the flattened parameter
         vector (ordering matches ``model.named_parameters()``), with 1s at
-        value-projection positions and 0s elsewhere.
+        the requested component's positions and 0s elsewhere.
     """
+    component = component.lower()
+    if component not in ("q", "k", "v"):
+        raise ValueError(f"component must be 'q', 'k', or 'v'; got {component!r}")
+
     param_names = [n for n, _ in model.named_parameters()]
     is_nanochat = any(n.endswith(".attn.c_v.weight") for n in param_names)
 
     mask_parts = []
     if is_nanochat:
+        target_suffix = f".attn.c_{component}.weight"
         for name, param in model.named_parameters():
-            if name.endswith(".attn.c_v.weight"):
+            if name.endswith(target_suffix):
                 mask_parts.append(torch.ones_like(param).reshape(-1))
             else:
                 mask_parts.append(torch.zeros_like(param).reshape(-1))
     else:
+        # Fused qkv: rows [0:d)=Q, [d:2d)=K, [2d:3d)=V.
+        row_start = {"q": 0, "k": 1, "v": 2}[component]
         for name, param in model.named_parameters():
             if name.endswith(".attn.qkv.weight"):
                 m = torch.zeros_like(param)
                 d = param.size(0) // 3
-                m[2 * d :, :] = 1.0
+                m[row_start * d : (row_start + 1) * d, :] = 1.0
                 mask_parts.append(m.reshape(-1))
             elif name.endswith(".attn.qkv.bias"):
                 m = torch.zeros_like(param)
                 d = param.size(0) // 3
-                m[2 * d :] = 1.0
+                m[row_start * d : (row_start + 1) * d] = 1.0
                 mask_parts.append(m.reshape(-1))
             else:
                 mask_parts.append(torch.zeros_like(param).reshape(-1))
@@ -72,6 +84,9 @@ def get_curvature_metrics(
     compute_fd: bool = False,
     hessian_batch_size: int = 128,
     label_smoothing: float = 0.0,
+    compute_more: bool = False,
+    qq_mask: torch.Tensor | None = None,
+    kk_mask: torch.Tensor | None = None,
 ) -> dict[str, float]:
     """
     Compute sharpness proxies for a classification model (cross-entropy loss).
@@ -91,20 +106,34 @@ def get_curvature_metrics(
       * ``fd``    — λ_max(H) via forward-difference finite differences (O(ε)).
       * ``kfac``  — K-FAC proxy: max λ_max(A)·λ_max(G) across all Linear layers.
 
+    Optional proxies (compute_more=True):
+      * ``hessian_qq`` — λ_max(H_QQ), H restricted to the query-projection
+                         subspace (requires ``qq_mask``).
+      * ``hessian_kk`` — λ_max(H_KK), H restricted to the key-projection
+                         subspace (requires ``kk_mask``).
+        Uses the same masked power-iteration pipeline as ``hessian_vv``,
+        just projecting the random vector and each Hessian-vector product
+        onto the query/key subspace instead of the value subspace.
+
     Args:
         model:              Model, unwrapped from DDP.
         optimizer:          Current optimiser (used to read Adam second moment).
         X:                  Training-batch images  (B, C, H, W).
         Y:                  Training-batch labels  (B,).
-        vv_mask:            Output of ``get_VV_subspace_mask(model)``.
+        vv_mask:            Output of ``get_VV_subspace_mask(model, "v")``.
         max_iter:           Power-iteration steps for λ_max estimation.
         compute_fd:         Enable finite-difference proxies (bfgs, fd) and K-FAC.
         hessian_batch_size: Samples sliced from X/Y for curvature estimation.
         label_smoothing:    Applied to the diagnostic CE loss.
+        compute_more:       Enable ``hessian_qq``/``hessian_kk`` proxies (extra
+                            power-iteration passes); requires ``qq_mask``/``kk_mask``.
+        qq_mask:            Output of ``get_VV_subspace_mask(model, "q")``.
+        kk_mask:            Output of ``get_VV_subspace_mask(model, "k")``.
 
     Returns:
         Dict with keys: ``hessian``, ``prec_h``, ``hessian_vv``, ``gn``,
-        ``fd``, ``diag_h``, ``fisher``, ``bfgs``, ``kfac``.
+        ``fd``, ``diag_h``, ``fisher``, ``bfgs``, ``kfac``, ``hessian_qq``,
+        ``hessian_kk``.
     """
     Xc = X[:hessian_batch_size].detach()
     Yc = Y[:hessian_batch_size].detach()
@@ -167,6 +196,44 @@ def get_curvature_metrics(
     hessian_vv_norm = (
         torch.dot(v_vv, flat_hvp_vv).item() if flat_hvp_vv is not None else 0.0
     )
+
+    # ---- 2b. Query/Key-subspace λ_max(H_QQ), λ_max(H_KK) (compute_more only) ----
+    hessian_qq_norm = 0.0
+    hessian_kk_norm = 0.0
+    if compute_more:
+        if qq_mask is not None:
+            qq_mask_dev = qq_mask.to(flat_grads.device)
+            v_qq = torch.randn_like(flat_grads) * qq_mask_dev
+            v_qq = v_qq / (v_qq.norm() + 1e-9)
+            flat_hvp_qq: torch.Tensor | None = None
+            for _ in range(max_iter):
+                hvp_qq = torch.autograd.grad(
+                    flat_grads, model.parameters(), grad_outputs=v_qq, retain_graph=True
+                )
+                flat_hvp_qq = torch.cat([g.contiguous().reshape(-1) for g in hvp_qq])
+                v_qq = flat_hvp_qq * qq_mask_dev
+                v_qq = v_qq / (v_qq.norm() + 1e-9)
+            hessian_qq_norm = (
+                torch.dot(v_qq, flat_hvp_qq).item() if flat_hvp_qq is not None else 0.0
+            )
+            del v_qq, flat_hvp_qq
+        if kk_mask is not None:
+            kk_mask_dev = kk_mask.to(flat_grads.device)
+            v_kk = torch.randn_like(flat_grads) * kk_mask_dev
+            v_kk = v_kk / (v_kk.norm() + 1e-9)
+            flat_hvp_kk: torch.Tensor | None = None
+            for _ in range(max_iter):
+                hvp_kk = torch.autograd.grad(
+                    flat_grads, model.parameters(), grad_outputs=v_kk, retain_graph=True
+                )
+                flat_hvp_kk = torch.cat([g.contiguous().reshape(-1) for g in hvp_kk])
+                v_kk = flat_hvp_kk * kk_mask_dev
+                v_kk = v_kk / (v_kk.norm() + 1e-9)
+            hessian_kk_norm = (
+                torch.dot(v_kk, flat_hvp_kk).item() if flat_hvp_kk is not None else 0.0
+            )
+            del v_kk, flat_hvp_kk
+        torch.cuda.empty_cache()
 
     # ---- 3. Adam-preconditioned Hessian λ_max(D^{-½} H D^{-½}) ----
     D_inv_sqrt_parts = []
@@ -456,6 +523,8 @@ def get_curvature_metrics(
         "fisher": fisher_norm,
         "bfgs": bfgs_norm,
         "kfac": kfac_norm,
+        "hessian_qq": hessian_qq_norm,
+        "hessian_kk": hessian_kk_norm,
     }
 
 
