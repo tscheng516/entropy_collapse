@@ -245,9 +245,9 @@ class ViT5BaseCIFAR100Config(TrainConfig):
     init_std: float = 0.02
     use_scaled_init: bool = False
     label_smoothing: float = 0.1
-    drop_path_rate: float = 0.1
+    drop_path_rate: float = 0.0
 
-    learning_rate: float = 3e-3
+    learning_rate: float = 3e-4
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -284,9 +284,9 @@ class ViT5LargeCIFAR100Config(TrainConfig):
     init_std: float = 0.02
     use_scaled_init: bool = False
     label_smoothing: float = 0.1
-    drop_path_rate: float = 0.3
+    drop_path_rate: float = 0.0
 
-    learning_rate: float = 3e-3
+    learning_rate: float = 3e-4
     weight_decay: float = 0.05
     beta2: float = 0.999
     eps: float = 1e-8
@@ -294,7 +294,7 @@ class ViT5LargeCIFAR100Config(TrainConfig):
     max_iters: int = 20000
     warmup_iters: int = 2000
     lr_decay_iters: int = 20000
-    min_lr: float = 3e-5
+    min_lr: float = 3e-6
 
     out_dir: str = "out/cifar100/vit5l"
     wandb_log: bool = True
@@ -326,7 +326,7 @@ class ViT5SmallImageNet1kConfig(TrainConfig):
     init_std: float = 0.02
     use_scaled_init: bool = False
     label_smoothing: float = 0.1
-    drop_path_rate: float = 0.05
+    drop_path_rate: float = 0.0
 
     learning_rate: float = 4e-3
     weight_decay: float = 0.05
@@ -368,7 +368,7 @@ class ViT5BaseImageNet1kConfig(TrainConfig):
     init_std: float = 0.02
     use_scaled_init: bool = False
     label_smoothing: float = 0.1
-    drop_path_rate: float = 0.2
+    drop_path_rate: float = 0.0
 
     learning_rate: float = 3e-3
     weight_decay: float = 0.05
@@ -410,7 +410,7 @@ class ViT5LargeImageNet1kConfig(TrainConfig):
     init_std: float = 0.02
     use_scaled_init: bool = False
     label_smoothing: float = 0.1
-    drop_path_rate: float = 0.35
+    drop_path_rate: float = 0.0
 
     learning_rate: float = 3e-3
     weight_decay: float = 0.05
