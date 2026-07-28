@@ -220,7 +220,7 @@ class ViT5SmallCIFAR100Config(TrainConfig):
 
     out_dir: str = "out/cifar100/vit5s"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-vit5-cifar100"
+    # wandb_project: str = "entropy-collapse-vit5-cifar100"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
@@ -259,7 +259,7 @@ class ViT5BaseCIFAR100Config(TrainConfig):
 
     out_dir: str = "out/cifar100/vit5b"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-vit5-cifar100"
+    # wandb_project: str = "entropy-collapse-vit5-cifar100"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
@@ -298,7 +298,7 @@ class ViT5LargeCIFAR100Config(TrainConfig):
 
     out_dir: str = "out/cifar100/vit5l"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-vit5-cifar100"
+    # wandb_project: str = "entropy-collapse-vit5-cifar100"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
@@ -340,7 +340,7 @@ class ViT5SmallImageNet1kConfig(TrainConfig):
 
     out_dir: str = "out/imagenet1k/vit5s"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-vit5-imagenet1k"
+    # wandb_project: str = "entropy-collapse-vit5-imagenet1k
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
@@ -382,7 +382,7 @@ class ViT5BaseImageNet1kConfig(TrainConfig):
 
     out_dir: str = "out/imagenet1k/vit5b"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-vit5-imagenet1k"
+    # wandb_project: str = "entropy-collapse-vit5-imagenet1k"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
@@ -424,7 +424,7 @@ class ViT5LargeImageNet1kConfig(TrainConfig):
 
     out_dir: str = "out/imagenet1k/vit5l"
     wandb_log: bool = True
-    wandb_project: str = "entropy-collapse-vit5-imagenet1k"
+    # wandb_project: str = "entropy-collapse-vit5-imagenet1k"
     wandb_run_name: str = time.strftime("%Y%m%d-%H%M%S")
 
 
