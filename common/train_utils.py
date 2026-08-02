@@ -3,8 +3,10 @@
 Functions
 ---------
 resolve_config(default_cls, configs, is_master) -> cfg
-    Parse ``config=<preset>`` and ``key=value`` CLI overrides.
-    No argparse — every dataclass field is addressable directly as key=value.
+    Parse ``config=<preset>``, ``key=value``, and ``--bool_flag`` CLI overrides.
+    No argparse — every dataclass field is addressable directly as key=value,
+    and boolean fields can additionally be switched on via --flag (e.g.
+    --compute_fd, --compute_qqkk, --compute_spectrum, --compute_grad_norm).
 
 setup_ddp_and_run_dir(cfg, is_master)
     -> (use_ddp, rank, world_size, local_rank, device, run_out_dir)
@@ -31,12 +33,15 @@ import torch.distributed as dist
 
 
 def resolve_config(default_cls, configs: dict, is_master: bool):
-    """Select a config preset and apply key=value CLI overrides.
+    """Select a config preset and apply key=value / --flag CLI overrides.
 
     Scans ``sys.argv`` for:
 
     * ``config=<preset>`` — select a named preset class from *configs*.
     * ``key=value``       — override any field on the resulting dataclass.
+    * ``--key``           — shorthand to set a *boolean* field to ``True``
+                            (e.g. ``--compute_fd``, ``--compute_qqkk``,
+                            ``--compute_spectrum``, ``--compute_grad_norm``).
 
     Every dataclass field is directly addressable as a key=value argument,
     so no argparse shortcuts are needed.
@@ -67,6 +72,21 @@ def resolve_config(default_cls, configs: dict, is_master: bool):
     cfg = config_cls()
 
     for arg in sys.argv[1:]:
+        if arg.startswith("--"):
+            key = arg[2:]
+            if not hasattr(cfg, key):
+                if is_master:
+                    print(f"[warn] unknown config key '--{key}', ignoring.")
+                continue
+            if not isinstance(getattr(cfg, key), bool):
+                if is_master:
+                    print(
+                        f"[warn] '--{key}' only works for boolean fields; "
+                        f"use '{key}=<value>' instead. Ignoring."
+                    )
+                continue
+            setattr(cfg, key, True)
+            continue
         if "=" in arg:
             key, val = arg.split("=", 1)
             if key == "config":
