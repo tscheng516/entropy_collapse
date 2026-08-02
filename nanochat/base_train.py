@@ -426,7 +426,6 @@ run_training(
     ctx=ctx,
     ckpt_extra_fields=ckpt_extra_fields,
     has_accuracy=False,
-    qq_kk_masks=None,
     save_periodic_ckpt=False,
     initial_iter_num=iter_num,
     initial_best_val_loss=best_val_loss,

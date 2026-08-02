@@ -107,15 +107,22 @@ class TrainConfig:
     # 2 sequences at T=512 uses ~50 MB for attention during HVP; safe
     # on any GPU.  Increase to 4–8 if your GPU has ≥40 GB.
     compute_fd: bool = False
+    compute_qqkk: bool = False
+    # Enable hessian_qq/hessian_kk proxies (H restricted to the query/key
+    # projection subspaces); costs two extra power-iteration passes.
     label_smoothing: float = 0.0
 
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
     entropy_intv: int = 50
-    att_sim: bool = False
-    # When True, do a final forward pass after training and save an
-    # attention heatmap (layer=1, head=1) via plot_results.
+    compute_spectrum: bool = False
+    # When True, also track attention-head similarity, feature-covariance
+    # stable rank, and snapshot attention heatmaps / Gram matrices for
+    # plotting.
+    compute_grad_norm: bool = False
+    # When True, track the L2 norm of the gradient (full model and
+    # attention-submodule-only) at every training step.
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention

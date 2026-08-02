@@ -54,11 +54,11 @@ def plot_results(
     hessian_intv: int = 50,
     entropy_intv: int = 50,
     compute_fd: bool = False,
-    compute_more: bool = False,
+    compute_qqkk: bool = False,
     vs_H_prec: bool = False,
     layout: str = "22",
     fmt: str = "png",
-    att_sim: bool = False,
+    compute_spectrum: bool = False,
 ) -> plt.Figure:
     """
     Layout modes
@@ -77,9 +77,9 @@ def plot_results(
         hessian_intv: Hessian computation frequency (x-axis label).
         entropy_intv: Entropy computation frequency (x-axis label).
         compute_fd:   If True, include BFGS and FD metrics.
-        compute_more: If True, include the H_QQ / H_KK query/key-subspace
+        compute_qqkk: If True, include the H_QQ / H_KK query/key-subspace
                       curvature proxies (only meaningful if they were
-                      computed during training via ``compute_more=True``).
+                      computed during training via ``compute_qqkk=True``).
 
     Returns:
         The matplotlib ``Figure``.
@@ -137,7 +137,7 @@ def plot_results(
         kfac_arr = kfac_idx = np.array([], dtype=int)
         bfgs_arr = bfgs_idx = np.array([], dtype=int)
         fd_arr   = fd_idx   = np.array([], dtype=int)
-    if compute_more:
+    if compute_qqkk:
         qq_arr, qq_idx = _prep("hessian_qq")
         kk_arr, kk_idx = _prep("hessian_kk")
     else:
@@ -161,7 +161,7 @@ def plot_results(
     ]
     if compute_fd:
         _x_max_cands += [idx[-1] for idx in [bfgs_idx, fd_idx] if len(idx) > 0]
-    if compute_more:
+    if compute_qqkk:
         _x_max_cands += [idx[-1] for idx in [qq_idx, kk_idx] if len(idx) > 0]
     _x_max: int | None = int(max(_x_max_cands)) if _x_max_cands else None
 
@@ -266,7 +266,7 @@ def plot_results(
                 (bfgs_arr, bfgs_idx, "navy", ":",  "BFGS"),
                 (fd_arr,   fd_idx,   "cyan", "-.", "FD"),
             ]
-        if compute_more:
+        if compute_qqkk:
             _metric_specs += [
                 (qq_arr, qq_idx, "dodgerblue", "--", r"Query Subspace ($H_{QQ}$)"),
                 (kk_arr, kk_idx, "orangered",  ":",  r"Key Subspace ($H_{KK}$)"),
@@ -312,7 +312,7 @@ def plot_results(
             (bfgs_arr, bfgs_idx, "navy", "BFGS"),
             (fd_arr,   fd_idx,   "cyan", "FD"),
         ]
-    if compute_more:
+    if compute_qqkk:
         _proxies3 += [
             (qq_arr, qq_idx, "dodgerblue", r"$H_{QQ}$"),
             (kk_arr, kk_idx, "orangered",  r"$H_{KK}$"),
@@ -382,10 +382,10 @@ def plot_results(
         fig.savefig(save_path, format=fmt, dpi=150, bbox_inches="tight")
 
     # ------------------------------------------------------------------
-    # Optional: attention heatmap figure (att_sim=True)
+    # Optional: attention heatmap figure (compute_spectrum=True)
     # Generated after the summary figure so it never blocks the main plot.
     # ------------------------------------------------------------------
-    if att_sim:
+    if compute_spectrum:
         heatmap_arr = history.get("att_heatmap")
         if heatmap_arr is not None:
             heatmap_arr = np.asarray(heatmap_arr, dtype=float)
@@ -565,7 +565,7 @@ def main() -> None:
         help="Include k-Fac, BFGS and FD metrics (only if computed during training).",
     )
     parser.add_argument(
-        "--compute-more", action="store_true",
+        "--compute-qqkk", action="store_true",
         help="Include H_QQ / H_KK query/key-subspace metrics (only if computed during training).",
     )
     parser.add_argument(
@@ -584,7 +584,7 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--att-sim", action="store_true",
+        "--compute-spectrum", action="store_true",
         help="Generate attention heatmap (layer=1, head=1) from history['att_heatmap'] if present.",
     )
     parser.add_argument(
@@ -621,11 +621,11 @@ def main() -> None:
             hessian_intv=args.hessian_intv,
             entropy_intv=args.entropy_intv,
             compute_fd=args.compute_fd,
-            compute_more=args.compute_more,
+            compute_qqkk=args.compute_qqkk,
             vs_H_prec=args.vs_H_prec,
             layout=args.layout,
             fmt=args.fmt,
-            att_sim=args.att_sim,
+            compute_spectrum=args.compute_spectrum,
         )
         plt.close(fig)
         print(f"           → saved to {save_path}")

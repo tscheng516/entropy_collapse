@@ -16,7 +16,7 @@ Logged every ``eval_interval``:
 Logged every ``hessian_intv``:
   * Curvature proxies — lambda_max of H, Prec_H, H_VV, GN, Diag_H, Fisher
     (+ KFAC, BFGS and FD when compute_fd=True)
-    (+ H_QQ, H_KK when compute_more=True)
+    (+ H_QQ, H_KK when compute_qqkk=True)
 
 Logged every ``entropy_intv``:
   * Per-layer attention entropy
@@ -294,17 +294,13 @@ def update_schedule(optimizer_: torch.optim.Optimizer, it: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# 7.  Loss / metrics step, validation estimation, and Q/K/V subspace masks
+# 7.  Loss / metrics step and validation estimation
 #
-#   compute_more (cfg field) enables the hessian_qq/hessian_kk curvature
-#   proxies via get_curvature_metrics(..., compute_more=True, qq_mask=...,
-#   kk_mask=...) — see common/pretrain.py::run_training.
+#   cfg.compute_qqkk enables the hessian_qq/hessian_kk curvature proxies
+#   (query/key-projection subspace masks are built internally) — see
+#   common/pretrain.py::run_training.
 # ---------------------------------------------------------------------------
-from common.helpers import get_VV_subspace_mask  # noqa: E402
-
 _raw_model = model.module if use_ddp else model
-qq_mask = get_VV_subspace_mask(_raw_model, component="q").to(device)
-kk_mask = get_VV_subspace_mask(_raw_model, component="k").to(device)
 
 
 def step_fn(raw_model: torch.nn.Module, X: torch.Tensor, Y: torch.Tensor):
@@ -349,7 +345,6 @@ run_training(
     ctx=ctx,
     ckpt_extra_fields=ckpt_extra_fields,
     has_accuracy=True,
-    qq_kk_masks=(qq_mask, kk_mask),
     save_periodic_ckpt=True,
     initial_iter_num=iter_num,
     initial_best_val_loss=best_val_loss,

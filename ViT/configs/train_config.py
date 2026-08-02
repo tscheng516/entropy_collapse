@@ -117,15 +117,22 @@ class TrainConfig:
     # Smaller values reduce peak GPU memory; 128 is sufficient for λ_max tracking.
     compute_fd: bool = False
     # Enable finite-difference proxies (BFGS, FD) and K-FAC; costs extra passes.
+    compute_qqkk: bool = False
+    # Enable hessian_qq/hessian_kk proxies (H restricted to the query/key
+    # projection subspaces); costs two extra power-iteration passes.
 
     # ------------------------------------------------------------------ #
     # Attention entropy
     # ------------------------------------------------------------------ #
     entropy_intv: int = 50
     # Compute per-layer attention entropy every N iterations.
-    att_sim: bool = False
-    # When True, do a final forward pass after training and save an
-    # attention heatmap (layer=1, head=1) via plot_results.
+    compute_spectrum: bool = False
+    # When True, also track attention-head similarity, feature-covariance
+    # stable rank, and snapshot attention heatmaps / Gram matrices for
+    # plotting.
+    compute_grad_norm: bool = False
+    # When True, track the L2 norm of the gradient (full model and
+    # attention-submodule-only) at every training step.
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention

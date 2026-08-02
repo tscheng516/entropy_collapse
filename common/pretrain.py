@@ -17,10 +17,20 @@ Design notes
   when the tensor is already on *device*, so this works whether the caller's
   ``train_iter``/``estimate_val`` places tensors on-device itself
   (nanochat's streaming loader) or not (ViT/ViT5's ``DataLoader``).
-* ``getattr(cfg, "grad_clip", 0.0)`` and ``getattr(cfg, "compute_more", False)``
-  (via ``qq_kk_masks``) let configs without those fields (nanochat has no
-  ``grad_clip``; ViT/nanochat have no ``compute_more``) fall back to the
-  historical no-op behaviour without any adapter branching.
+* Optional metric groups are each gated by a single boolean config field,
+  read via ``getattr(cfg, "<flag>", False)`` so configs that don't define a
+  given flag simply keep it disabled instead of erroring:
+    - ``compute_fd``          — bfgs, fd, kfac curvature proxies.
+    - ``compute_qqkk``        — hessian_qq, hessian_kk curvature proxies
+                                 (query/key-projection subspaces; masks are
+                                 built internally, no caller wiring needed).
+    - ``compute_spectrum``    — similarity, cov_stable_rank_post_attn/ffn,
+                                 att_heatmaps(+iters), gram_hessian(+iters).
+    - ``compute_grad_norm``   — grad_norm_full, grad_norm_attn.
+  When a flag is off, the corresponding history keys are omitted entirely
+  (not just left empty) and the underlying computation is skipped.
+* ``getattr(cfg, "grad_clip", 0.0)`` lets configs without that field
+  (nanochat) fall back to the historical no-op (no clipping) behaviour.
 * ``save_periodic_ckpt`` preserves each project's historical
   best/periodic-checkpoint-on-improvement behaviour: ViT and nanochat only
   update the ``best_val_loss`` bookkeeping without writing ``best_ckpt``/
@@ -46,6 +56,7 @@ from common.helpers import (
     get_attention_heatmap_all,
     get_attention_gram_head0,
     get_feature_covariance_stable_rank,
+    get_grad_norm,
 )
 from common.train_utils import init_wandb, save_history_and_plot
 
@@ -102,7 +113,6 @@ def run_training(
     ctx,
     ckpt_extra_fields: dict,
     has_accuracy: bool = False,
-    qq_kk_masks: "tuple[torch.Tensor, torch.Tensor] | None" = None,
     save_periodic_ckpt: bool = True,
     initial_iter_num: int = 0,
     initial_best_val_loss: float = float("inf"),
@@ -138,11 +148,6 @@ def run_training(
         has_accuracy:   Whether ``step_fn``/``estimate_val`` populate
                         ``"acc"`` — controls whether ``acc``/``val_acc``
                         history keys and log lines are used.
-        qq_kk_masks:    Optional ``(qq_mask, kk_mask)`` tensors, used only when
-                        ``getattr(cfg, "compute_more", False)`` is true, to
-                        enable the ``hessian_qq``/``hessian_kk`` curvature
-                        proxies. Safe to always pass the tuple — it is
-                        ignored when ``cfg.compute_more`` is false/absent.
         save_periodic_ckpt: Whether to write ``best_ckpt``/``ckpt`` to disk
                         on validation improvement (in addition to
                         ``checkpoint_interval`` and the final checkpoint).
@@ -166,8 +171,12 @@ def run_training(
     n_layers = len(blocks)
 
     vv_mask = get_VV_subspace_mask(_raw_model).to(device)
-    compute_more = getattr(cfg, "compute_more", False)
-    qq_mask, kk_mask = qq_kk_masks if qq_kk_masks is not None else (None, None)
+    compute_fd = cfg.compute_fd
+    compute_qqkk = getattr(cfg, "compute_qqkk", False)
+    compute_spectrum = getattr(cfg, "compute_spectrum", False)
+    compute_grad_norm = getattr(cfg, "compute_grad_norm", False)
+    qq_mask = get_VV_subspace_mask(_raw_model, "q").to(device) if compute_qqkk else None
+    kk_mask = get_VV_subspace_mask(_raw_model, "k").to(device) if compute_qqkk else None
 
     iter_num = initial_iter_num
     best_val_loss = initial_best_val_loss
@@ -193,27 +202,32 @@ def run_training(
         "prec_h": [],
         "hessian_vv": [],
         "gn": [],
-        "fd": [],
         "diag_h": [],
         "fisher": [],
-        "bfgs": [],
-        "kfac": [],
         "entropy": [],
-        "similarity": [],
-        "cov_stable_rank_post_attn": [],
-        "cov_stable_rank_post_ffn": [],
         "lr": [],
-        "att_heatmaps": [],
-        "att_heatmap_iters": [],
-        "gram_hessian": [],
-        "gram_hessian_iters": [],
     }
     if has_accuracy:
         history["acc"] = []
         history["val_acc"] = []
-    if compute_more:
+    if compute_fd:
+        history["fd"] = []
+        history["bfgs"] = []
+        history["kfac"] = []
+    if compute_qqkk:
         history["hessian_qq"] = []
         history["hessian_kk"] = []
+    if compute_spectrum:
+        history["similarity"] = []
+        history["cov_stable_rank_post_attn"] = []
+        history["cov_stable_rank_post_ffn"] = []
+        history["att_heatmaps"] = []
+        history["att_heatmap_iters"] = []
+        history["gram_hessian"] = []
+        history["gram_hessian_iters"] = []
+    if compute_grad_norm:
+        history["grad_norm_full"] = []
+        history["grad_norm_attn"] = []
 
     if _is_master:
         print(f"\n[train] starting — max_iters={cfg.max_iters}  device={device}\n")
@@ -267,7 +281,7 @@ def run_training(
                     _save_checkpoint("ckpt")
 
             # ---- Attention heatmap snapshot (all layers & heads) ----
-            if cfg.att_sim and (not use_ddp or rank == 0):
+            if compute_spectrum and (not use_ddp or rank == 0):
                 _raw_model.eval()
                 for blk in blocks:
                     blk.attn._cache_attn = True
@@ -311,10 +325,10 @@ def run_training(
                     Y,
                     vv_mask,
                     max_iter=cfg.hessian_max_iter,
-                    compute_fd=cfg.compute_fd,
+                    compute_fd=compute_fd,
                     hessian_batch_size=cfg.hessian_batch_size,
                     label_smoothing=cfg.label_smoothing,
-                    compute_more=compute_more,
+                    compute_qqkk=compute_qqkk,
                     qq_mask=qq_mask,
                     kk_mask=kk_mask,
                 )
@@ -324,14 +338,18 @@ def run_training(
             finally:
                 optimizer.zero_grad()
 
-        for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd", "diag_h", "fisher", "bfgs", "kfac"):
+        for k in ("hessian", "prec_h", "hessian_vv", "gn", "diag_h", "fisher"):
             history[k].append(curvature[k])
-        if compute_more:
+        if compute_fd:
+            history["fd"].append(curvature["fd"])
+            history["bfgs"].append(curvature["bfgs"])
+            history["kfac"].append(curvature["kfac"])
+        if compute_qqkk:
             history["hessian_qq"].append(curvature["hessian_qq"])
             history["hessian_kk"].append(curvature["hessian_kk"])
 
         # ---- Attention Gram matrix snapshot (head=0, all layers, hessian batch) ----
-        if iter_num % cfg.hessian_intv == 0 and cfg.att_sim and (not use_ddp or rank == 0):
+        if iter_num % cfg.hessian_intv == 0 and compute_spectrum and (not use_ddp or rank == 0):
             _raw_model.eval()
             _Xc = X[:cfg.hessian_batch_size]
             for blk in blocks:
@@ -367,18 +385,22 @@ def run_training(
             if _need_entropy:
                 with torch.no_grad():
                     layer_entropies = get_attention_entropy(_raw_model)
-                    layer_sims = get_attention_similarity(_raw_model)
+                    if compute_spectrum:
+                        layer_sims = get_attention_similarity(_raw_model)
                 for blk in blocks:
                     blk.attn._cache_attn = False
                     blk.attn.last_att = None  # free memory immediately
 
         loss.backward()
+        if compute_grad_norm:
+            grad_norm_full = get_grad_norm(_raw_model, attn_only=False)
+            grad_norm_attn = get_grad_norm(_raw_model, attn_only=True)
         if getattr(cfg, "grad_clip", 0.0) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         optimizer.step()
 
-        # ---- Feature covariance stable rank (att_sim only) ----
-        if _need_entropy and cfg.att_sim:
+        # ---- Feature covariance stable rank (compute_spectrum only) ----
+        if _need_entropy and compute_spectrum:
             _cov = get_feature_covariance_stable_rank(
                 _raw_model,
                 X,
@@ -396,9 +418,13 @@ def run_training(
             history["acc"].append(train_acc)
         history["lr"].append(lr)
         history["entropy"].append(layer_entropies)
-        history["similarity"].append(layer_sims)
-        history["cov_stable_rank_post_attn"].append(cov_stable_rank_post_attn)
-        history["cov_stable_rank_post_ffn"].append(cov_stable_rank_post_ffn)
+        if compute_spectrum:
+            history["similarity"].append(layer_sims)
+            history["cov_stable_rank_post_attn"].append(cov_stable_rank_post_attn)
+            history["cov_stable_rank_post_ffn"].append(cov_stable_rank_post_ffn)
+        if compute_grad_norm:
+            history["grad_norm_full"].append(grad_norm_full)
+            history["grad_norm_attn"].append(grad_norm_attn)
 
         # pre-fetch next batch
         X, Y = next(train_iter)
@@ -413,35 +439,36 @@ def run_training(
                 if has_accuracy:
                     _line += f"| acc {train_acc:.1f}% "
                 _line += f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
+                if compute_grad_norm:
+                    _line += f" | gnorm {grad_norm_full:.3f} (attn {grad_norm_attn:.3f})"
                 print(_line)
-                if iter_num % cfg.entropy_intv == 0:
+                if iter_num % cfg.entropy_intv == 0 and compute_spectrum:
                     _sim_str = "  ".join(
                         f"L{i}:[" + ",".join(f"{v:.3f}" for v in hs) + "]"
                         for i, hs in enumerate(layer_sims)
                     )
                     print(f"  attn_sim(all_h): {_sim_str}")
-                    if cfg.att_sim:
-                        _cov_str_attn = "  ".join(
-                            f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_attn)
-                        )
-                        _cov_str_ffn = "  ".join(
-                            f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_ffn)
-                        )
-                        print(f"  cov_sr(post_attn): {_cov_str_attn}")
-                        print(f"  cov_sr(post_ffn):  {_cov_str_ffn}")
+                    _cov_str_attn = "  ".join(
+                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_attn)
+                    )
+                    _cov_str_ffn = "  ".join(
+                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_ffn)
+                    )
+                    print(f"  cov_sr(post_attn): {_cov_str_attn}")
+                    print(f"  cov_sr(post_ffn):  {_cov_str_ffn}")
                 if iter_num % cfg.hessian_intv == 0:
                     _cmsg = (
                         f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
                         f"| H_VV {curvature['hessian_vv']:.3f} | GN {curvature['gn']:.3f} "
                         f"| DiagH {curvature['diag_h']:.3f} | Fisher {curvature['fisher']:.3f}"
                     )
-                    if cfg.compute_fd:
+                    if compute_fd:
                         _cmsg += (
                             f" | BFGS {curvature['bfgs']:.3f}"
                             f" | FD {curvature['fd']:.3f}"
                             f" | KFAC {curvature['kfac']:.3f}"
                         )
-                    if compute_more:
+                    if compute_qqkk:
                         _cmsg += (
                             f" | H_QQ {curvature['hessian_qq']:.3f}"
                             f" | H_KK {curvature['hessian_kk']:.3f}"
@@ -454,6 +481,9 @@ def run_training(
                 }
                 if has_accuracy:
                     log_dict["train/acc"] = train_acc
+                if compute_grad_norm:
+                    log_dict["grad_norm/full"] = grad_norm_full
+                    log_dict["grad_norm/attn"] = grad_norm_attn
                 if iter_num % cfg.hessian_intv == 0:
                     log_dict.update(
                         {
@@ -465,7 +495,7 @@ def run_training(
                             "hessian/fisher": curvature["fisher"],
                         }
                     )
-                    if cfg.compute_fd:
+                    if compute_fd:
                         log_dict.update(
                             {
                                 "hessian/FD": curvature["fd"],
@@ -473,7 +503,7 @@ def run_training(
                                 "hessian/KFAC": curvature["kfac"],
                             }
                         )
-                    if compute_more:
+                    if compute_qqkk:
                         log_dict.update(
                             {
                                 "hessian/H_QQ": curvature["hessian_qq"],
@@ -484,14 +514,14 @@ def run_training(
                     log_dict.update(
                         {f"entropy/layer_{i}": v for i, v in enumerate(layer_entropies)}
                     )
-                    log_dict.update(
-                        {
-                            f"attn_sim/layer_{i}_head_{j}": v
-                            for i, hs in enumerate(layer_sims)
-                            for j, v in enumerate(hs)
-                        }
-                    )
-                    if cfg.att_sim:
+                    if compute_spectrum:
+                        log_dict.update(
+                            {
+                                f"attn_sim/layer_{i}_head_{j}": v
+                                for i, hs in enumerate(layer_sims)
+                                for j, v in enumerate(hs)
+                            }
+                        )
                         log_dict.update(
                             {
                                 f"cov_sr/post_attn_layer_{i}": v
@@ -510,7 +540,7 @@ def run_training(
     # Final checkpoint & history
     # ---------------------------------------------------------------------
     _save_checkpoint("final_ckpt")
-    save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, att_sim=cfg.att_sim)
+    save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, att_sim=compute_spectrum)
 
     # ---------------------------------------------------------------------
     # DDP teardown

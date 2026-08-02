@@ -133,7 +133,7 @@ class TrainConfig:
     # Samples sliced from the training batch for curvature estimation.
     compute_fd: bool = False
     # Enable finite-difference proxies (BFGS, FD) and K-FAC; costs extra passes.
-    compute_more: bool = False
+    compute_qqkk: bool = False
     # Enable hessian_qq/hessian_kk proxies (H restricted to the query/key
     # projection subspaces); costs two extra power-iteration passes.
 
@@ -142,8 +142,13 @@ class TrainConfig:
     # ------------------------------------------------------------------ #
     entropy_intv: int = 50
     # Compute per-layer attention entropy every N iterations.
-    att_sim: bool = False
-    # When True, also snapshot attention heatmaps / Gram matrices for plotting.
+    compute_spectrum: bool = False
+    # When True, also track attention-head similarity, feature-covariance
+    # stable rank, and snapshot attention heatmaps / Gram matrices for
+    # plotting.
+    compute_grad_norm: bool = False
+    # When True, track the L2 norm of the gradient (full model and
+    # attention-submodule-only) at every training step.
 
     # ------------------------------------------------------------------ #
     # Temperature-shift intervention

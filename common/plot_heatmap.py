@@ -110,7 +110,7 @@ def plot_heatmap(
         if single is None:
             raise KeyError(
                 "Neither 'att_heatmaps' nor 'att_heatmap' found in history. "
-                "Re-run training with att_sim=True to record attention maps."
+                "Re-run training with compute_spectrum=True to record attention maps."
             )
         maps = np.asarray(single, dtype=float)[np.newaxis]  # (1, S, S)
         iters = np.array([0])

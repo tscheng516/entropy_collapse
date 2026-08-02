@@ -298,7 +298,7 @@ def save_history_and_plot(
         skip_intv=True,
         vs_H_prec=True,
         compute_fd=cfg.compute_fd,
-        compute_more=getattr(cfg, "compute_more", False),
+        compute_qqkk=getattr(cfg, "compute_qqkk", False),
         att_sim=att_sim,
         fmt="png",
     )

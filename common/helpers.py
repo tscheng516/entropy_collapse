@@ -10,6 +10,35 @@ from torch.func import functional_call
 from torch.autograd import functional as autograd_functional
 
 
+def get_grad_norm(model: torch.nn.Module, attn_only: bool = False) -> float:
+    """
+    Compute the L2 norm of the current parameter gradients.
+
+    Call after ``loss.backward()`` and before ``optimizer.step()`` /
+    ``zero_grad()`` so ``.grad`` tensors are populated for the current step.
+
+    Args:
+        model:     Model (unwrapped from DDP) with populated ``.grad`` tensors.
+        attn_only: When True, restrict the norm to parameters inside each
+                   block's attention submodule (name contains ``".attn."``),
+                   covering the Q/K/V/output projections for both the
+                   fused-QKV (ViT/ViT5) and separate-QKV (nanochat)
+                   architectures.
+
+    Returns:
+        L2 norm (float) of the (optionally filtered) gradient vector; 0.0 if
+        no matching parameter currently has a gradient.
+    """
+    sq_sum = 0.0
+    for name, p in model.named_parameters():
+        if p.grad is None:
+            continue
+        if attn_only and ".attn." not in name:
+            continue
+        sq_sum += p.grad.detach().float().pow(2).sum().item()
+    return sq_sum ** 0.5
+
+
 def get_blocks(model: torch.nn.Module) -> list:
     """
     Return the list of transformer blocks for a hooked model, auto-detecting
@@ -113,7 +142,7 @@ def get_curvature_metrics(
     compute_fd: bool = False,
     hessian_batch_size: int = 128,
     label_smoothing: float = 0.0,
-    compute_more: bool = False,
+    compute_qqkk: bool = False,
     qq_mask: torch.Tensor | None = None,
     kk_mask: torch.Tensor | None = None,
 ) -> dict[str, float]:
@@ -135,7 +164,7 @@ def get_curvature_metrics(
       * ``fd``    — λ_max(H) via forward-difference finite differences (O(ε)).
       * ``kfac``  — K-FAC proxy: max λ_max(A)·λ_max(G) across all Linear layers.
 
-    Optional proxies (compute_more=True):
+    Optional proxies (compute_qqkk=True):
       * ``hessian_qq`` — λ_max(H_QQ), H restricted to the query-projection
                          subspace (requires ``qq_mask``).
       * ``hessian_kk`` — λ_max(H_KK), H restricted to the key-projection
@@ -154,7 +183,7 @@ def get_curvature_metrics(
         compute_fd:         Enable finite-difference proxies (bfgs, fd) and K-FAC.
         hessian_batch_size: Samples sliced from X/Y for curvature estimation.
         label_smoothing:    Applied to the diagnostic CE loss.
-        compute_more:       Enable ``hessian_qq``/``hessian_kk`` proxies (extra
+        compute_qqkk:       Enable ``hessian_qq``/``hessian_kk`` proxies (extra
                             power-iteration passes); requires ``qq_mask``/``kk_mask``.
         qq_mask:            Output of ``get_VV_subspace_mask(model, "q")``.
         kk_mask:            Output of ``get_VV_subspace_mask(model, "k")``.
@@ -226,10 +255,10 @@ def get_curvature_metrics(
         torch.dot(v_vv, flat_hvp_vv).item() if flat_hvp_vv is not None else 0.0
     )
 
-    # ---- 2b. Query/Key-subspace λ_max(H_QQ), λ_max(H_KK) (compute_more only) ----
+    # ---- 2b. Query/Key-subspace λ_max(H_QQ), λ_max(H_KK) (compute_qqkk only) ----
     hessian_qq_norm = 0.0
     hessian_kk_norm = 0.0
-    if compute_more:
+    if compute_qqkk:
         if qq_mask is not None:
             qq_mask_dev = qq_mask.to(flat_grads.device)
             v_qq = torch.randn_like(flat_grads) * qq_mask_dev

@@ -88,7 +88,7 @@ def plot_gram(
     if not grams_raw:
         raise KeyError(
             "'gram_hessian' not found (or empty) in history. "
-            "Re-run training with att_sim=True to record Gram matrices."
+            "Re-run training with compute_spectrum=True to record Gram matrices."
         )
 
     n_snapshots = len(grams_raw)
