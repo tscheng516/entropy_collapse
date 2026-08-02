@@ -42,14 +42,11 @@ from __future__ import annotations
 
 import os
 import sys
-import math
-import time
 from contextlib import nullcontext
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.distributed as dist
 
 # True on rank-0 (or single-GPU); works before dist.init_process_group.
 _is_master = int(os.environ.get("RANK", "0")) == 0
@@ -68,7 +65,15 @@ if _SCRIPT_DIR not in sys.path:
 # 1.  Configuration
 # ---------------------------------------------------------------------------
 from configs.train_config import TrainConfig, CONFIGS
-from common.train_utils import resolve_config, setup_ddp_and_run_dir, init_wandb, save_history_and_plot
+from common.train_utils import (
+    resolve_config,
+    setup_ddp_and_run_dir,
+    build_adamw_with_decay_split,
+    cosine_warmup_lr,
+    wrap_model_ddp,
+)
+from common.helpers import strip_compile_prefix
+from common.pretrain import run_training, estimate_classification_val_metrics
 
 cfg = resolve_config(TrainConfig, CONFIGS, _is_master)
 
@@ -274,458 +279,73 @@ if cfg.compile:
         print("[model] compiling with torch.compile (disable for Hessian metrics)")
     model = torch.compile(model)
 
-if use_ddp:
-    if torch.cuda.is_available() and cfg.device.startswith("cuda"):
-        model.to(device)
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[local_rank], output_device=local_rank
-        )
-    else:
-        model = torch.nn.parallel.DistributedDataParallel(model)
-else:
-    model.to(device)
+model = wrap_model_ddp(model, use_ddp, device, local_rank)
 
 # ---------------------------------------------------------------------------
 # 5.  Optimiser
 # ---------------------------------------------------------------------------
-def _build_optimizer(model_: torch.nn.Module) -> torch.optim.Optimizer:
-    if cfg.optimizer.lower() == "adamw":
-        # Weight-decay split: apply only to weight tensors (not biases / norms)
-        decay_params = [
-            p for n, p in model_.named_parameters()
-            if p.requires_grad and p.ndim >= 2
-        ]
-        no_decay_params = [
-            p for n, p in model_.named_parameters()
-            if p.requires_grad and p.ndim < 2
-        ]
-        param_groups = [
-            {"params": decay_params, "weight_decay": cfg.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ]
-        return torch.optim.AdamW(
-            param_groups,
-            lr=cfg.learning_rate,
-            betas=(cfg.beta1, cfg.beta2),
-            eps=cfg.eps,
-        )
-    elif cfg.optimizer.lower() == "sgd":
-        return torch.optim.SGD(model_.parameters(), lr=cfg.learning_rate)
-    else:
-        raise ValueError(f"Unknown optimizer '{cfg.optimizer}'")
+optimizer = build_adamw_with_decay_split(model, cfg)
 
-
-optimizer = _build_optimizer(model)
 
 # ---------------------------------------------------------------------------
 # 6.  LR schedule  (cosine with linear warm-up)
 # ---------------------------------------------------------------------------
-def get_lr(it: int) -> float:
-    if not cfg.decay_lr:
-        return cfg.learning_rate
-    if it < cfg.warmup_iters:
-        return cfg.learning_rate * (it + 1) / cfg.warmup_iters
-    if it > cfg.lr_decay_iters:
-        return cfg.min_lr
-    ratio = (it - cfg.warmup_iters) / max(1, cfg.lr_decay_iters - cfg.warmup_iters)
-    coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
-    return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
+def update_schedule(optimizer_: torch.optim.Optimizer, it: int) -> float:
+    lr = cosine_warmup_lr(it, cfg)
+    for pg in optimizer_.param_groups:
+        pg["lr"] = lr
+    return lr
 
 
 # ---------------------------------------------------------------------------
-# 7.  W&B
+# 7.  Loss / metrics step & validation estimation
 # ---------------------------------------------------------------------------
-init_wandb(cfg, use_ddp, rank)
-if cfg.wandb_log:
-    import wandb
-
-# ---------------------------------------------------------------------------
-# 8.  Helpers: curvature (spectral-norm) metrics & attention entropy
-#
-#   get_curvature_metrics  returns λ_max estimates for nine curvature proxies:
-#     hessian   — λ_max(H)               exact Hessian, power iteration
-#     prec_h    — λ_max(D^{-½} H D^{-½}) Adam-preconditioned Hessian
-#     hessian_vv— λ_max(H_VV)            H restricted to value-proj subspace
-#     gn        — λ_max(H_GN)            Gauss-Newton (J^T H_L J)
-#     bfgs      — λ_max(H)               central-difference FD (O(ε²))
-#     fd        — λ_max(H)               forward-difference FD (O(ε))
-#     diag_h    — max(diag(H))           Bekas–Kokiopoulou–Saad estimator
-#     fisher    — λ_max(F)               empirical Fisher
-#     kfac      — max λ_max(A)·λ_max(G)  K-FAC Kronecker proxy
-# ---------------------------------------------------------------------------
-from common.helpers import (
-    get_VV_subspace_mask,
-    get_curvature_metrics,
-    get_attention_entropy,
-    get_attention_similarity,
-    get_attention_heatmap,
-    get_attention_heatmap_all,
-    get_attention_gram_head0,
-    get_feature_covariance_stable_rank,
-    strip_compile_prefix,
-)
-
-# Unwrap DDP to get the underlying module for mask / entropy helpers
 _raw_model = model.module if use_ddp else model
-vv_mask = get_VV_subspace_mask(_raw_model).to(device)
 
 
-@torch.no_grad()
-def estimate_val_metrics(n_batches: int = 10) -> tuple[float, float]:
-    """Return (mean_val_loss, top1_accuracy_percent) over n_batches."""
-    _raw_model.eval()
-    losses, correct, total = [], 0, 0
-    val_iter_local = iter(val_loader)
-    for _ in range(n_batches):
-        try:
-            xv, yv = next(val_iter_local)
-        except StopIteration:
-            break
-        xv, yv = xv.to(device), yv.to(device)
-        with ctx:
-            logits = _raw_model(xv)
-        lv = F.cross_entropy(logits, yv)
-        losses.append(lv.item())
-        correct += (logits.argmax(dim=-1) == yv).sum().item()
-        total += yv.size(0)
-    _raw_model.train()
-    val_loss = float(np.mean(losses)) if losses else float("inf")
-    val_acc = 100.0 * correct / total if total > 0 else 0.0
-    return val_loss, val_acc
+def step_fn(raw_model: torch.nn.Module, X: torch.Tensor, Y: torch.Tensor):
+    logits = raw_model(X)
+    loss = F.cross_entropy(logits, Y, label_smoothing=cfg.label_smoothing)
+    acc = 100.0 * (logits.argmax(dim=-1) == Y).float().mean().item()
+    return loss, {"acc": acc}
 
 
-def _save_checkpoint(suffix: str = "ckpt") -> None:
-    if not use_ddp or rank == 0:
-        checkpoint = {
-            "model": _raw_model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "iter_num": iter_num,
-            "best_val_loss": best_val_loss,
-            "model_name": cfg.model_name,
-            "num_classes": cfg.num_classes,
-            "qk_norm": cfg.qk_norm,
-            "depth": cfg.depth,
-            "num_heads": cfg.num_heads,
-            "embed_dim": cfg.embed_dim,
-            "patch_size": cfg.patch_size,
-            "config": vars(cfg),
-        }
-        path = os.path.join(run_out_dir, f"{suffix}.pt")
-        torch.save(checkpoint, path)
-        print(f"[ckpt] saved → {path}")
+def estimate_val() -> dict:
+    return estimate_classification_val_metrics(_raw_model, val_loader, ctx, device)
 
 
 # ---------------------------------------------------------------------------
-# 9.  Training loop
+# 8.  Shared training loop (common/pretrain.py)
 # ---------------------------------------------------------------------------
-n_layers = len(_raw_model.blocks)
-
-history: dict[str, list] = {
-    "loss": [],
-    "acc": [],
-    "val_loss": [],
-    "val_acc": [],
-    "hessian": [],
-    "prec_h": [],
-    "hessian_vv": [],
-    "gn": [],
-    "fd": [],
-    "diag_h": [],
-    "fisher": [],
-    "bfgs": [],
-    "kfac": [],
-    "entropy": [],
-    "similarity": [],
-    "cov_stable_rank_post_attn": [],
-    "cov_stable_rank_post_ffn": [],
-    "lr": [],
-    "att_heatmaps": [],
-    "att_heatmap_iters": [],
-    "gram_hessian": [],
-    "gram_hessian_iters": [],
+ckpt_extra_fields = {
+    "model_name": cfg.model_name,
+    "num_classes": cfg.num_classes,
+    "qk_norm": cfg.qk_norm,
+    "depth": cfg.depth,
+    "num_heads": cfg.num_heads,
+    "embed_dim": cfg.embed_dim,
+    "patch_size": cfg.patch_size,
 }
 
-if _is_master:
-    print(f"\n[train] starting — max_iters={cfg.max_iters}  device={device}\n")
-t0 = time.time()
-model.train()
+run_training(
+    cfg,
+    model,
+    optimizer,
+    train_iter,
+    update_schedule,
+    step_fn,
+    estimate_val,
+    set_attention_temperature,
+    use_ddp=use_ddp,
+    rank=rank,
+    device=device,
+    run_out_dir=run_out_dir,
+    ctx=ctx,
+    ckpt_extra_fields=ckpt_extra_fields,
+    has_accuracy=True,
+    qq_kk_masks=None,
+    save_periodic_ckpt=False,
+    initial_iter_num=iter_num,
+    initial_best_val_loss=best_val_loss,
+)
 
-X, Y = next(train_iter)
-X, Y = X.to(device), Y.to(device)
-
-for iter_num in range(iter_num, cfg.max_iters):
-
-    # ---- LR update ----
-    lr = get_lr(iter_num)
-    for pg in optimizer.param_groups:
-        pg["lr"] = lr
-
-    # ---- Temperature-shift intervention ----
-    if cfg.temp_shift_step >= 0 and iter_num == cfg.temp_shift_step:
-        set_attention_temperature(model, cfg.temp_shift_factor)
-        if _is_master:
-            print(
-                f"[temp_shift] iter {iter_num}: applied temperature={cfg.temp_shift_factor:.4g} "
-                f"to all attention heads"
-            )
-        if cfg.wandb_log and (not use_ddp or rank == 0):
-            wandb.log({"intervention/temp_shift_factor": cfg.temp_shift_factor}, step=iter_num)
-
-    # ---- Periodic evaluation ----
-    if iter_num % cfg.eval_interval == 0 or iter_num == cfg.max_iters - 1:
-        val_loss, val_acc = estimate_val_metrics()
-        history["val_loss"].append((iter_num, val_loss))
-        history["val_acc"].append((iter_num, val_acc))
-        if _is_master:
-            print(
-                f"[eval] iter {iter_num:5d} | val_loss {val_loss:.4f} "
-                f"| val_acc {val_acc:.2f}%  "
-            )
-        if cfg.wandb_log and (not use_ddp or rank == 0):
-            wandb.log(
-                {"val/loss": val_loss, "val/acc": val_acc},
-                step=iter_num,
-            )
-
-        if (cfg.save_checkpoint or val_loss < best_val_loss) and iter_num > 0:
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                # _save_checkpoint("best_ckpt")
-            # _save_checkpoint("ckpt")
-
-        # ---- Attention heatmap snapshot (all layers & heads) ----
-        if cfg.att_sim and (not use_ddp or rank == 0):
-            _raw_model.eval()
-            for blk in _raw_model.blocks:
-                blk.attn._cache_attn = True
-            with torch.no_grad():
-                with ctx:
-                    _ = _raw_model(X)
-            _snapshot = get_attention_heatmap_all(_raw_model)
-            if _snapshot is not None:
-                history["att_heatmaps"].append(_snapshot)
-                history["att_heatmap_iters"].append(iter_num)
-            for blk in _raw_model.blocks:
-                blk.attn._cache_attn = False
-                blk.attn.last_att = None
-            _raw_model.train()
-
-    if cfg.checkpoint_interval > 0 and iter_num % cfg.checkpoint_interval == 0 and iter_num > 0:
-        _save_checkpoint(f"ckpt_iter{iter_num:06d}")
-
-    # ---- Curvature metrics (spectral norm) ----
-    # All nine proxies are λ_max (or max-diagonal) estimates; reset to 0 on
-    # non-measurement iterations so history entries have consistent length.
-    curvature: dict[str, float] = {
-        "hessian": 0.0,
-        "prec_h": 0.0,
-        "hessian_vv": 0.0,
-        "gn": 0.0,
-        "fd": 0.0,
-        "diag_h": 0.0,
-        "fisher": 0.0,
-        "bfgs": 0.0,
-        "kfac": 0.0,
-    }
-    if iter_num % cfg.hessian_intv == 0:
-        _raw_model.train()
-        optimizer.zero_grad()
-        try:
-            curvature = get_curvature_metrics(
-                _raw_model,
-                optimizer,
-                X,
-                Y,
-                vv_mask,
-                max_iter=cfg.hessian_max_iter,
-                compute_fd=cfg.compute_fd,
-                hessian_batch_size=cfg.hessian_batch_size,
-                label_smoothing=cfg.label_smoothing,
-            )
-        except Exception as exc:
-            if _is_master:
-                print(f"[warn] curvature metrics failed at iter {iter_num}: {exc}")
-        finally:
-            optimizer.zero_grad()
-
-    for k in ("hessian", "prec_h", "hessian_vv", "gn", "fd", "diag_h", "fisher", "bfgs", "kfac"):
-        history[k].append(curvature[k])
-
-    # ---- Attention Gram matrix snapshot (head=0, all layers, hessian batch) ----
-    if iter_num % cfg.hessian_intv == 0 and cfg.att_sim and (not use_ddp or rank == 0):
-        _raw_model.eval()
-        _Xc = X[:cfg.hessian_batch_size]
-        for blk in _raw_model.blocks:
-            blk.attn._cache_attn = True
-        with torch.no_grad():
-            with ctx:
-                _ = _raw_model(_Xc)
-        _grams = get_attention_gram_head0(_raw_model, head=0)
-        if _grams is not None:
-            history["gram_hessian"].append(_grams)
-            history["gram_hessian_iters"].append(iter_num)
-        for blk in _raw_model.blocks:
-            blk.attn._cache_attn = False
-            blk.attn.last_att = None
-        _raw_model.train()
-
-    # ---- Standard training step ----
-    layer_entropies: list[float] = [0.0] * n_layers
-    layer_sims: list[list[float]] = [[] for _ in range(n_layers)]
-    cov_stable_rank_post_attn: list[float] = [0.0] * n_layers
-    cov_stable_rank_post_ffn: list[float] = [0.0] * n_layers
-    _need_entropy = iter_num % cfg.entropy_intv == 0
-
-    # Enable attention caching only when entropy/similarity will be read.
-    if _need_entropy:
-        for blk in _raw_model.blocks:
-            blk.attn._cache_attn = True
-
-    optimizer.zero_grad(set_to_none=True)
-    with ctx:
-        logits = _raw_model(X)
-        loss = F.cross_entropy(logits, Y, label_smoothing=cfg.label_smoothing)
-
-        if _need_entropy:
-            with torch.no_grad():
-                layer_entropies = get_attention_entropy(_raw_model)
-                layer_sims = get_attention_similarity(_raw_model)
-            for blk in _raw_model.blocks:
-                blk.attn._cache_attn = False
-                blk.attn.last_att = None  # free ~684 MB immediately
-
-    loss.backward()
-    if cfg.grad_clip > 0.0:
-        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-    optimizer.step()
-
-    # ---- Feature covariance stable rank (att_sim only) ----
-    if _need_entropy and cfg.att_sim:
-        _cov = get_feature_covariance_stable_rank(
-            _raw_model,
-            X,
-            hessian_batch_size=cfg.hessian_batch_size,
-            max_iter=cfg.hessian_max_iter,
-        )
-        cov_stable_rank_post_attn = _cov["post_attn"]
-        cov_stable_rank_post_ffn  = _cov["post_ffn"]
-
-    loss_val = loss.item()
-    with torch.no_grad():
-        train_acc = 100.0 * (logits.argmax(dim=-1) == Y).float().mean().item()
-
-    history["loss"].append(loss_val)
-    history["acc"].append(train_acc)
-    history["lr"].append(lr)
-    history["entropy"].append(layer_entropies)
-    history["similarity"].append(layer_sims)
-    history["cov_stable_rank_post_attn"].append(cov_stable_rank_post_attn)
-    history["cov_stable_rank_post_ffn"].append(cov_stable_rank_post_ffn)
-
-    # pre-fetch next batch
-    X, Y = next(train_iter)
-    X, Y = X.to(device), Y.to(device)
-
-    # ---- Logging ----
-    if iter_num % cfg.log_interval == 0:
-        dt = time.time() - t0
-        t0 = time.time()
-        if _is_master:
-            print(
-                f"iter {iter_num:5d} | loss {loss_val:.4f} | acc {train_acc:.1f}% "
-                f"| lr {lr:.2e} | dt {dt * 1000:.1f}ms"
-            )
-            if iter_num % cfg.entropy_intv == 0:
-                _sim_str = "  ".join(
-                    f"L{i}:[" + ",".join(f"{v:.3f}" for v in hs) + "]"
-                    for i, hs in enumerate(layer_sims)
-                )
-                print(f"  attn_sim(all_h): {_sim_str}")
-                if cfg.att_sim:
-                    _cov_str_attn = "  ".join(
-                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_attn)
-                    )
-                    _cov_str_ffn = "  ".join(
-                        f"L{i}:{v:.3f}" for i, v in enumerate(cov_stable_rank_post_ffn)
-                    )
-                    print(f"  cov_sr(post_attn): {_cov_str_attn}")
-                    print(f"  cov_sr(post_ffn):  {_cov_str_ffn}")
-            if iter_num % cfg.hessian_intv == 0:
-                _cmsg = (
-                    f"  H {curvature['hessian']:.3f} | H~(prec) {curvature['prec_h']:.3f} "
-                    f"| H_VV {curvature['hessian_vv']:.3f} | GN {curvature['gn']:.3f} "
-                    f"| DiagH {curvature['diag_h']:.3f} | Fisher {curvature['fisher']:.3f}"
-                )
-                if cfg.compute_fd:
-                    _cmsg += (
-                        f" | BFGS {curvature['bfgs']:.3f}"
-                        f" | FD {curvature['fd']:.3f}"
-                        f" | KFAC {curvature['kfac']:.3f}"
-                    )
-                print(_cmsg)
-        if cfg.wandb_log and (not use_ddp or rank == 0):
-            log_dict: dict = {
-                "train/loss": loss_val,
-                "train/acc": train_acc,
-                "train/lr": lr,
-            }
-            if iter_num % cfg.hessian_intv == 0:
-                log_dict.update(
-                    {
-                        "hessian/lambda_max": curvature["hessian"],
-                        "hessian/prec_H": curvature["prec_h"],
-                        "hessian/H_VV": curvature["hessian_vv"],
-                        "hessian/GN": curvature["gn"],
-                        "hessian/diag_H": curvature["diag_h"],
-                        "hessian/fisher": curvature["fisher"],
-                    }
-                )
-                if cfg.compute_fd:
-                    log_dict.update(
-                        {
-                            "hessian/FD": curvature["fd"],
-                            "hessian/BFGS": curvature["bfgs"],
-                            "hessian/KFAC": curvature["kfac"],
-                        }
-                    )
-            if iter_num % cfg.entropy_intv == 0:
-                log_dict.update(
-                    {
-                        f"entropy/layer_{i}": v
-                        for i, v in enumerate(layer_entropies)
-                    }
-                )
-                log_dict.update(
-                    {
-                        f"attn_sim/layer_{i}_head_{j}": v
-                        for i, hs in enumerate(layer_sims)
-                        for j, v in enumerate(hs)
-                    }
-                )
-                if cfg.att_sim:
-                    log_dict.update(
-                        {
-                            f"cov_sr/post_attn_layer_{i}": v
-                            for i, v in enumerate(cov_stable_rank_post_attn)
-                        }
-                    )
-                    log_dict.update(
-                        {
-                            f"cov_sr/post_ffn_layer_{i}": v
-                            for i, v in enumerate(cov_stable_rank_post_ffn)
-                        }
-                    )
-            wandb.log(log_dict, step=iter_num)
-
-# ---------------------------------------------------------------------------
-# 10.  Final checkpoint & history
-# ---------------------------------------------------------------------------
-_save_checkpoint("final_ckpt")
-
-save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, att_sim=cfg.att_sim)
-
-# ---------------------------------------------------------------------------
-# 11.  DDP teardown
-# ---------------------------------------------------------------------------
-if use_ddp:
-    dist.destroy_process_group()

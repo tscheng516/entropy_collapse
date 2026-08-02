@@ -10,6 +10,35 @@ from torch.func import functional_call
 from torch.autograd import functional as autograd_functional
 
 
+def get_blocks(model: torch.nn.Module) -> list:
+    """
+    Return the list of transformer blocks for a hooked model, auto-detecting
+    the container attribute:
+
+    * ViT / ViT5: ``model.blocks``
+    * nanochat:   ``model.transformer.h``
+
+    This consolidates the same detection performed independently inside
+    ``get_attention_entropy``, ``get_attention_similarity``,
+    ``get_attention_heatmap``, ``get_attention_heatmap_all``,
+    ``get_attention_gram_head0``, and ``get_feature_covariance_stable_rank``.
+    Intended for callers (e.g. ``common/pretrain.py``) that need direct
+    access to the block list, such as toggling ``block.attn._cache_attn``.
+
+    Args:
+        model: A hooked model (unwrapped from DDP).
+
+    Returns:
+        List (or ``ModuleList``) of transformer blocks, or ``[]`` if neither
+        container attribute is present.
+    """
+    if hasattr(model, "blocks"):
+        return model.blocks
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        return model.transformer.h
+    return []
+
+
 def get_VV_subspace_mask(
     model: torch.nn.Module, component: str = "v"
 ) -> torch.Tensor:

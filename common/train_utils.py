@@ -21,6 +21,7 @@ save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank)
 from __future__ import annotations
 
 import ast
+import math
 import os
 import sys
 import time
@@ -145,6 +146,101 @@ def setup_ddp_and_run_dir(cfg, is_master: bool):
         print(f"[io] outputs \u2192 {run_out_dir}")
 
     return use_ddp, rank, world_size, local_rank, device, run_out_dir
+
+
+def wrap_model_ddp(model, use_ddp: bool, device: str, local_rank: int):
+    """Place *model* on *device* and, if running under DDP, wrap it.
+
+    ``model.to(device)`` is idempotent, so this is safe to call even when
+    the model (e.g. nanochat's GPT) was already constructed directly on
+    *device*.
+
+    Args:
+        model:      The (unwrapped) model to place/wrap.
+        use_ddp:    Whether distributed training is active.
+        device:     Target device string (e.g. ``"cuda:0"``).
+        local_rank: Local rank, used for ``device_ids`` under DDP+CUDA.
+
+    Returns:
+        The (possibly ``DistributedDataParallel``-wrapped) model.
+    """
+    if use_ddp:
+        if torch.cuda.is_available() and device.startswith("cuda"):
+            model.to(device)
+            model = torch.nn.parallel.DistributedDataParallel(
+                model, device_ids=[local_rank], output_device=local_rank
+            )
+        else:
+            model.to(device)
+            model = torch.nn.parallel.DistributedDataParallel(model)
+    else:
+        model.to(device)
+    return model
+
+
+def build_adamw_with_decay_split(model, cfg) -> torch.optim.Optimizer:
+    """Build an AdamW/SGD optimizer with a weight-decay split.
+
+    Weight tensors (``ndim >= 2``) get ``cfg.weight_decay``; biases and
+    norm parameters (``ndim < 2``) get ``0.0``. Lifted from the identical
+    ``_build_optimizer`` in ViT/base_train.py and ViT5/base_train.py.
+
+    Args:
+        model: The (possibly DDP-wrapped) model whose parameters to optimize.
+        cfg:   Config dataclass; must have ``optimizer``, ``learning_rate``,
+               ``weight_decay``, ``beta1``, ``beta2``, ``eps``.
+
+    Returns:
+        A ``torch.optim.AdamW`` or ``torch.optim.SGD`` instance.
+    """
+    if cfg.optimizer.lower() == "adamw":
+        decay_params = [
+            p for n, p in model.named_parameters()
+            if p.requires_grad and p.ndim >= 2
+        ]
+        no_decay_params = [
+            p for n, p in model.named_parameters()
+            if p.requires_grad and p.ndim < 2
+        ]
+        param_groups = [
+            {"params": decay_params, "weight_decay": cfg.weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+        return torch.optim.AdamW(
+            param_groups,
+            lr=cfg.learning_rate,
+            betas=(cfg.beta1, cfg.beta2),
+            eps=cfg.eps,
+        )
+    elif cfg.optimizer.lower() == "sgd":
+        return torch.optim.SGD(model.parameters(), lr=cfg.learning_rate)
+    else:
+        raise ValueError(f"Unknown optimizer '{cfg.optimizer}'")
+
+
+def cosine_warmup_lr(it: int, cfg) -> float:
+    """Cosine LR schedule with linear warm-up.
+
+    Lifted from the identical ``get_lr(it)`` in ViT/base_train.py and
+    ViT5/base_train.py.
+
+    Args:
+        it:  Current iteration.
+        cfg: Config dataclass; must have ``decay_lr``, ``warmup_iters``,
+             ``learning_rate``, ``lr_decay_iters``, ``min_lr``.
+
+    Returns:
+        Learning rate for iteration *it*.
+    """
+    if not cfg.decay_lr:
+        return cfg.learning_rate
+    if it < cfg.warmup_iters:
+        return cfg.learning_rate * (it + 1) / cfg.warmup_iters
+    if it > cfg.lr_decay_iters:
+        return cfg.min_lr
+    ratio = (it - cfg.warmup_iters) / max(1, cfg.lr_decay_iters - cfg.warmup_iters)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
+    return cfg.min_lr + coeff * (cfg.learning_rate - cfg.min_lr)
 
 
 def init_wandb(cfg, use_ddp: bool, rank: int) -> None:
