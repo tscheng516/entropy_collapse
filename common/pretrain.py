@@ -540,7 +540,7 @@ def run_training(
     # Final checkpoint & history
     # ---------------------------------------------------------------------
     _save_checkpoint("final_ckpt")
-    save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, att_sim=compute_spectrum)
+    save_history_and_plot(history, cfg, run_out_dir, use_ddp, rank, compute_spectrum)
 
     # ---------------------------------------------------------------------
     # DDP teardown

@@ -280,7 +280,7 @@ def save_history_and_plot(
     cfg,
     run_out_dir: str,
     use_ddp: bool,
-    rank: int,    att_sim: bool = False,) -> None:
+    rank: int,    compute_spectrum: bool = False,) -> None:
     """Serialize ``history`` to ``history.pkl`` and run ``plot_results``
     (rank-0 / single-GPU only).
 
@@ -319,7 +319,8 @@ def save_history_and_plot(
         vs_H_prec=True,
         compute_fd=cfg.compute_fd,
         compute_qqkk=getattr(cfg, "compute_qqkk", False),
-        att_sim=att_sim,
+        compute_spectrum=getattr(cfg, "compute_spectrum", False),
+        layout="16",
         fmt="png",
     )
     plt.close("all")

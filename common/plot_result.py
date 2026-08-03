@@ -65,6 +65,9 @@ def plot_results(
     ------------
     "12" — 1×2: avg entropy (thumbnail) | curvature subset (H, Prec_H, H_VV, GN)
     "15" — 1×5: loss | entropy | curvature | ref vs proxies | ref vs entropy
+    "16" — 1×6: loss | entropy | gradient | curvature | ref vs proxies | ref vs entropy
+            (extends "15" with a gradient-norm panel; only populated when
+            history contains ``grad_norm_full``/``grad_norm_attn``).
     "22" — 2×2: entropy (top-left) | curvature (top-right)
                 ref vs entropy (bottom-left) | ref vs proxies (bottom-right)
     "13" — 1×3: entropy | curvature | ref vs proxies
@@ -76,16 +79,27 @@ def plot_results(
                       plot them against their true iteration indices.
         hessian_intv: Hessian computation frequency (x-axis label).
         entropy_intv: Entropy computation frequency (x-axis label).
-        compute_fd:   If True, include BFGS and FD metrics.
+        compute_fd:   If True, include BFGS and FD metrics. Auto-enabled when
+                      the history already contains ``fd``/``bfgs``/``kfac``,
+                      even if not explicitly passed.
         compute_qqkk: If True, include the H_QQ / H_KK query/key-subspace
                       curvature proxies (only meaningful if they were
                       computed during training via ``compute_qqkk=True``).
+                      Auto-enabled when the history already contains
+                      ``hessian_qq``/``hessian_kk``, even if not explicitly
+                      passed.
 
     Returns:
         The matplotlib ``Figure``.
     """
     with open(pkl_path, "rb") as fh:
         history = pickle.load(fh)
+
+    # Auto-detect optional metric groups from the saved history itself, so
+    # callers don't need to know which flags were active during training —
+    # if the data is there, plot it; if not, skip it gracefully.
+    compute_fd = compute_fd or bool(history.get("fd"))
+    compute_qqkk = compute_qqkk or bool(history.get("hessian_qq"))
 
     if layout == "12":
         fig, (_a0, _a1) = plt.subplots(1, 2, figsize=(14, 6))
@@ -100,6 +114,21 @@ def plot_results(
         fig, (_a0, _a1, _a2) = plt.subplots(1, 3, figsize=(21, 6))
         # entropy | curvature | ref vs proxies  (ref vs entropy omitted)
         axs = [None, _a0, _a1, _a2, None]
+    elif layout == "16":
+        fig, _axs_raw = plt.subplots(1, 6, figsize=(42, 6))
+        # Visual (left-to-right) order: loss | entropy | gradient | curvature |
+        # ref-vs-proxy | ref-vs-entropy. Internal indices 0-4 match layout "15"
+        # (loss, entropy, curvature, ref-vs-proxy, ref-vs-entropy) so the
+        # existing panel-building code below is reused unchanged; index 5 is
+        # the new gradient-norm panel, placed at visual position 2.
+        axs = [
+            _axs_raw[0],  # 0: loss
+            _axs_raw[1],  # 1: entropy
+            _axs_raw[3],  # 2: curvature
+            _axs_raw[4],  # 3: ref vs proxies
+            _axs_raw[5],  # 4: ref vs entropy
+            _axs_raw[2],  # 5: gradient norm (new)
+        ]
     else:  # "15"
         fig, _axs_raw = plt.subplots(1, 5, figsize=(35, 6))
         axs = list(_axs_raw)
@@ -367,6 +396,27 @@ def plot_results(
         ax_sp_ent.grid(True, alpha=0.3, linestyle="--")
 
     # ------------------------------------------------------------------
+    # Panel 5 — Gradient norm (full model vs attention-only), layout "16" only.
+    # Dense per-iteration series (like loss/lr), not gated by any interval.
+    # Auto-skipped (empty panel) when the history has no grad_norm_* keys,
+    # i.e. training ran with compute_grad_norm=False.
+    # ------------------------------------------------------------------
+    ax_grad = axs[5] if len(axs) > 5 else None
+    if ax_grad is not None:
+        grad_full = _as1d("grad_norm_full")
+        grad_attn = _as1d("grad_norm_attn")
+        if grad_full.size > 0:
+            ax_grad.plot(grad_full, color="darkred", linewidth=1.5, label="Full model")
+        if grad_attn.size > 0:
+            ax_grad.plot(grad_attn, color="teal", linewidth=1.5, label="Attention only")
+        if grad_full.size > 0 or grad_attn.size > 0:
+            ax_grad.set_yscale("log")
+            ax_grad.legend(fontsize="medium", loc="best")
+        ax_grad.set_title("Gradient Norm", fontsize=24)
+        ax_grad.set_xlabel("Iteration", fontsize=20)
+        ax_grad.grid(True, alpha=0.3, linestyle="--")
+
+    # ------------------------------------------------------------------
     # Apply shared x limits to all panels
     # ------------------------------------------------------------------
     if _shared_x_max is not None:
@@ -574,11 +624,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--layout", type=str, default="15",
-        choices=["12", "15", "22", "13"],
+        choices=["12", "15", "16", "22", "13"],
         help=(
             "Figure layout: "
             "'12' = 1×2 thumbnail (avg-entropy|curvature-subset), "
             "'15' = 1×5 detailed (loss|entropy|curvature|ref-vs-proxy|ref-vs-entropy), "
+            "'16' = 1×6 detailed + gradient (loss|entropy|gradient|curvature|ref-vs-proxy|ref-vs-entropy), "
             "'22' = 2×2 square (entropy|curvature||ref-vs-entropy|ref-vs-proxy), "
             "'13' = 1×3 compact (entropy|curvature|ref-vs-proxy)."
         ),
